@@ -1,0 +1,625 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>Escuadrón</title>
+<style>
+  :root{
+    --bg:#050a1a;
+    --cyan:#3ff0ff; --magenta:#ff3fa8; --green:#3dff9e; --orange:#ff9a3c; --gold:#ffd24a;
+    --text:#e8f2ff; --dim:#8ea3c9;
+    --font:"Bahnschrift","DIN Condensed","Roboto Condensed","Arial Narrow",system-ui,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{
+    margin:0; background:radial-gradient(120% 80% at 50% 0%, #10204a 0%, var(--bg) 70%);
+    color:var(--text); font-family:var(--font);
+    display:flex; align-items:center; justify-content:center;
+    overflow:hidden; -webkit-tap-highlight-color:transparent;
+  }
+  #stage{
+    position:relative; width:min(100vw, 56.25vh); height:min(177.78vw, 100vh);
+    touch-action:none; user-select:none;
+    box-shadow:0 0 0 1px #1b2a55, 0 20px 60px rgba(0,0,0,.6);
+    overflow:hidden;
+  }
+  canvas{display:block; width:100%; height:100%}
+
+  /* HUD */
+  #hud{
+    position:absolute; inset:0 0 auto 0; display:flex; justify-content:space-between;
+    padding:14px 16px; pointer-events:none; font-variant-numeric:tabular-nums;
+  }
+  .stat{display:flex; flex-direction:column; line-height:1}
+  .stat.right{align-items:flex-end}
+  .stat .k{font-size:11px; letter-spacing:.18em; text-transform:uppercase; color:var(--dim)}
+  .stat .v{font-size:30px; font-weight:700; margin-top:4px; text-shadow:0 0 14px currentColor}
+  #soldiers{color:var(--cyan)}
+  #score{color:var(--gold)}
+
+  /* Overlays */
+  .overlay{
+    position:absolute; inset:0; display:flex; flex-direction:column;
+    align-items:center; justify-content:center; gap:14px; text-align:center; padding:28px;
+    background:linear-gradient(180deg, rgba(5,10,26,.72), rgba(5,10,26,.94));
+    animation:fade .25s ease both;
+  }
+  .overlay[hidden]{display:none}
+  h1{
+    margin:0; font-size:44px; letter-spacing:.14em; text-transform:uppercase; font-weight:800;
+    color:var(--cyan); text-shadow:0 0 26px rgba(63,240,255,.55);
+  }
+  h2{margin:0; font-size:28px; letter-spacing:.12em; text-transform:uppercase; color:var(--magenta);
+     text-shadow:0 0 22px rgba(255,63,168,.45)}
+  p{margin:0; max-width:280px; color:var(--dim); font-size:14px; line-height:1.55}
+  p b{color:var(--text); font-weight:600}
+  .scores{display:flex; gap:34px; margin:6px 0 2px}
+  .scores div{display:flex; flex-direction:column; gap:6px}
+  .scores span{font-size:11px; letter-spacing:.18em; text-transform:uppercase; color:var(--dim)}
+  .scores strong{font-size:34px; font-weight:800; color:var(--gold); font-variant-numeric:tabular-nums}
+  button{
+    margin-top:8px; font-family:var(--font); font-size:17px; font-weight:700;
+    letter-spacing:.16em; text-transform:uppercase; color:#04121c;
+    background:linear-gradient(180deg, #7ff6ff, var(--cyan)); border:0; border-radius:999px;
+    padding:14px 40px; cursor:pointer; box-shadow:0 0 30px rgba(63,240,255,.35);
+    transition:transform .12s ease, box-shadow .12s ease;
+  }
+  button:hover{transform:translateY(-2px); box-shadow:0 0 40px rgba(63,240,255,.5)}
+  button:active{transform:translateY(0)}
+  .back{
+    position:absolute; left:14px; bottom:14px; font-size:12px; letter-spacing:.16em;
+    text-transform:uppercase; color:var(--dim); text-decoration:none; z-index:5;
+  }
+  .back:hover{color:var(--cyan)}
+  @keyframes fade{from{opacity:0}to{opacity:1}}
+  @media (prefers-reduced-motion:reduce){
+    .overlay{animation:none} button{transition:none}
+  }
+</style>
+</head>
+<body>
+<div id="stage">
+  <canvas id="cv"></canvas>
+
+  <div id="hud">
+    <div class="stat"><span class="k">Soldados</span><span class="v" id="soldiers">1</span></div>
+    <div class="stat right"><span class="k">Puntos</span><span class="v" id="score">0</span></div>
+  </div>
+
+  <div class="overlay" id="startScreen">
+    <h1>Escuadrón</h1>
+    <p>Arrastra con el dedo o el ratón (o usa <b>&larr; &rarr;</b>) para elegir puerta.<br>
+       Multiplica tu escuadrón y revienta los bloques antes de que te alcancen.</p>
+    <button id="btnStart">Empezar</button>
+  </div>
+
+  <div class="overlay" id="endScreen" hidden>
+    <h2>Escuadrón aniquilado</h2>
+    <div class="scores">
+      <div><span>Puntos</span><strong id="finalScore">0</strong></div>
+      <div><span>Récord</span><strong id="bestScore">0</strong></div>
+    </div>
+    <button id="btnRetry">Reintentar</button>
+  </div>
+
+  <a class="back" href="../../index.html">&larr; Menú</a>
+</div>
+
+<script>
+(() => {
+'use strict';
+
+/* ============================================================
+   1. CFG - todas las constantes de balance
+   ============================================================ */
+const CFG = {
+  world: { w: 360, h: 640 },
+
+  squad: {
+    start: 1,
+    y: 566,                 // línea fija del escuadrón
+    soldierW: 8, soldierH: 11,
+    gapX: 10, gapY: 11,     // separación en la formación piramidal
+    maxDrawn: 60,           // soldados dibujados como máximo
+    follow: 13,             // suavizado hacia la posición objetivo
+    keySpeed: 340,          // px/s con teclado
+    pad: 4                  // margen contra los bordes
+  },
+
+  bullet: {
+    interval: 0.15,         // segundos entre ráfagas
+    speed: 640,
+    w: 3, h: 13,
+    maxCannons: 9,
+    soldiersPerCannon: 4    // un cañón más cada N soldados
+  },
+
+  gate: {
+    h: 56,
+    goodPairChance: 0.34,   // proporción de parejas con las dos puertas buenas
+    safeRows: 2,            // primeras filas sin puerta mala: con 1 soldado, un -N es muerte sin decisión
+    mulChance: 0.28,        // cuántas puertas buenas son xN: subirlo dispara el crecimiento
+    add: [4, 18],           // rango de +N
+    mul: [2, 3],            // rango de xN
+    subPct: [0.35, 0.8],    // -N como fracción del escuadrón: plano seria muerte instantanea al principio
+    subMin: 3,              // suelo de -N, para que siga doliendo con pocos soldados
+    div: [2, 4]             // rango de /N
+  },
+
+  enemy: {
+    h: 48,
+    baseHp: 6,
+    hpPerSoldier: 0.55,     // la amenaza escala con el escuadrón: sin esto el juego se gana solo
+    hpPerScore: 0.002,      // deriva lenta con la puntuación
+    hpJitterPct: 0.18,      // variación relativa entre bloques de una misma fila
+    minPerRow: 1, maxPerRow: 3,
+    scorePerHp: 2
+  },
+
+  scroll: {
+    base: 105,              // velocidad de bajada inicial (px/s)
+    perScore: 0.008,        // aceleración con la puntuación
+    max: 285
+  },
+
+  rowGap: 195,              // separación vertical entre filas generadas
+  startRunwaySec: 3.5,      // margen antes de que llegue la primera puerta
+  fx: { particles: 14, flash: 0.34, shakeTime: 0.32, shakeMag: 7 },
+  storageKey: 'macedonia.escuadron.best'
+};
+
+const W = CFG.world.w, H = CFG.world.h;
+
+/* ============================================================
+   2. Canvas y escalado
+   ============================================================ */
+const cv  = document.getElementById('cv');
+const ctx = cv.getContext('2d');
+let scaleX = 1, scaleY = 1;
+
+function resize() {
+  const r   = cv.getBoundingClientRect();
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  cv.width  = Math.max(1, Math.round(r.width  * dpr));
+  cv.height = Math.max(1, Math.round(r.height * dpr));
+  scaleX = cv.width  / W;
+  scaleY = cv.height / H;
+  ctx.setTransform(scaleX, 0, 0, scaleY, 0, 0);
+}
+window.addEventListener('resize', resize);
+
+/* ============================================================
+   3. Estado y reinicio
+   ============================================================ */
+const S = {
+  mode: 'menu',            // 'menu' | 'play' | 'over'
+  squadX: W / 2,
+  targetX: W / 2,
+  soldiers: CFG.squad.start,
+  score: 0,
+  best: 0,
+  rows: [],
+  bullets: [],
+  parts: [],
+  fireT: 0,
+  rowIndex: 0,
+  topY: 0,                 // y de la última fila generada
+  grid: 0,
+  flash: 0, flashColor: null,
+  shake: 0,
+  keyDir: 0
+};
+
+const el = {
+  soldiers: document.getElementById('soldiers'),
+  score:    document.getElementById('score'),
+  start:    document.getElementById('startScreen'),
+  end:      document.getElementById('endScreen'),
+  final:    document.getElementById('finalScore'),
+  best:     document.getElementById('bestScore')
+};
+
+function loadBest() {
+  try { return parseInt(localStorage.getItem(CFG.storageKey), 10) || 0; }
+  catch (err) { return 0; }
+}
+function saveBest(v) {
+  try { localStorage.setItem(CFG.storageKey, String(v)); }
+  catch (err) { /* almacenamiento bloqueado: seguir jugando */ }
+}
+
+function syncHud() {
+  el.soldiers.textContent = S.soldiers;
+  el.score.textContent    = S.score;
+}
+
+function reset() {
+  S.squadX = S.targetX = W / 2;
+  S.soldiers = CFG.squad.start;
+  S.score = 0;
+  S.rows.length = 0; S.bullets.length = 0; S.parts.length = 0;
+  S.fireT = 0; S.rowIndex = 0; S.grid = 0;
+  S.flash = 0; S.flashColor = null; S.shake = 0; S.keyDir = 0;
+  // La primera fila arranca a una distancia que da margen para colocarse
+  S.topY = CFG.squad.y - CFG.scroll.base * CFG.startRunwaySec + CFG.rowGap;
+  while (S.topY > -CFG.rowGap) spawnRow();   // el tablero arranca ya poblado
+  syncHud();
+}
+
+/* ============================================================
+   4. Generación de filas
+   ============================================================ */
+const rnd  = (a, b) => a + Math.random() * (b - a);
+const rndi = (a, b) => Math.floor(rnd(a, b + 1));
+
+function goodOp() {
+  return Math.random() < CFG.gate.mulChance
+    ? { op: '×', val: rndi(CFG.gate.mul[0], CFG.gate.mul[1]), good: true }
+    : { op: '+', val: rndi(CFG.gate.add[0], CFG.gate.add[1]), good: true };
+}
+function badOp() {
+  if (Math.random() < 0.5) {
+    const pct = rnd(CFG.gate.subPct[0], CFG.gate.subPct[1]);
+    return { op: '−', val: Math.max(CFG.gate.subMin, Math.round(S.soldiers * pct)), good: false };
+  }
+  return { op: '÷', val: rndi(CFG.gate.div[0], CFG.gate.div[1]), good: false };
+}
+
+function makeGateRow(y, safe) {
+  let left, right;
+  if (safe || Math.random() < CFG.gate.goodPairChance) {
+    // Las dos buenas pero desiguales: la elección depende de cuántos soldados llevas
+    left = goodOp(); right = goodOp();
+    if (left.op === right.op && left.val === right.val) right.val += 1;
+  } else {
+    left = goodOp(); right = badOp();
+    if (Math.random() < 0.5) { const t = left; left = right; right = t; }
+  }
+  return { type: 'gate', y, left, right, used: false };
+}
+
+function makeEnemyRow(y) {
+  const n     = rndi(CFG.enemy.minPerRow, CFG.enemy.maxPerRow);
+  const laneW = W / n;
+  const hpAvg = CFG.enemy.baseHp
+              + S.soldiers * CFG.enemy.hpPerSoldier
+              + S.score    * CFG.enemy.hpPerScore;
+  const j = CFG.enemy.hpJitterPct;
+  const blocks = [];
+  for (let i = 0; i < n; i++) {
+    const hp = Math.max(1, Math.round(hpAvg * (1 + rnd(-j, j))));
+    blocks.push({ x: i * laneW + 7, w: laneW - 14, hp, maxHp: hp });
+  }
+  return { type: 'enemy', y, blocks };
+}
+
+function spawnRow() {
+  const y = S.topY - CFG.rowGap;
+  // Las dos primeras filas siempre puertas: con 1 soldado contra un bloque no hay partida
+  const isGate = S.rowIndex < 2 ? true : (S.rowIndex % 2 === 0);
+  S.rows.push(isGate ? makeGateRow(y, S.rowIndex < CFG.gate.safeRows) : makeEnemyRow(y));
+  S.topY = y;
+  S.rowIndex++;
+}
+
+/* Formación piramidal, cacheada por número de soldados */
+const formCache = new Map();
+
+function formation(n) {
+  const k = Math.max(1, Math.min(n, CFG.squad.maxDrawn));
+  let f = formCache.get(k);
+  if (f) return f;
+  const pts = [];
+  let left = k, row = 0, maxCols = 1;
+  while (left > 0) {
+    const cols = Math.min(2 * row + 1, left);
+    maxCols = Math.max(maxCols, cols);
+    const x0 = -(cols - 1) * CFG.squad.gapX / 2;
+    for (let c = 0; c < cols; c++) {
+      pts.push({ x: x0 + c * CFG.squad.gapX, y: -row * CFG.squad.gapY });
+    }
+    left -= cols; row++;
+  }
+  f = { pts, half: (maxCols - 1) * CFG.squad.gapX / 2 + CFG.squad.soldierW / 2 };
+  formCache.set(k, f);
+  return f;
+}
+
+/* Efectos */
+function burst(x, y, color, n) {
+  for (let i = 0; i < n; i++) {
+    const a = rnd(0, Math.PI * 2), s = rnd(40, 190);
+    S.parts.push({ x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, life: rnd(.25, .6), t: 0, color });
+  }
+}
+function flash(color) { S.flash = CFG.fx.flash; S.flashColor = color; }
+
+/* ============================================================
+   5. Update
+   ============================================================ */
+function applyGate(g) {
+  const side = S.squadX < W / 2 ? g.left : g.right;
+  const before = S.soldiers;
+  switch (side.op) {
+    case '+':        S.soldiers += side.val; break;
+    case '×':   S.soldiers *= side.val; break;
+    case '−':   S.soldiers -= side.val; break;
+    case '÷':   S.soldiers = Math.floor(S.soldiers / side.val); break;
+  }
+  S.soldiers = Math.max(0, Math.round(S.soldiers));
+  g.used = true;
+  const gained = S.soldiers > before;
+  burst(S.squadX, CFG.squad.y - 20, gained ? '#3dff9e' : '#ff9a3c', CFG.fx.particles);
+  flash(gained ? 'rgba(61,255,158,' : 'rgba(255,90,90,');
+  syncHud();
+  if (S.soldiers <= 0) gameOver();
+}
+
+function damage(enemy, row, bx, by) {
+  enemy.hp--;
+  burst(bx, by, '#ff3fa8', 4);
+  if (enemy.hp <= 0) {
+    S.score += enemy.maxHp * CFG.enemy.scorePerHp;
+    burst(enemy.x + enemy.w / 2, row.y + CFG.enemy.h / 2, '#ff3fa8', CFG.fx.particles);
+    row.blocks.splice(row.blocks.indexOf(enemy), 1);
+    syncHud();
+  }
+}
+
+function update(dt) {
+  const speed = Math.min(CFG.scroll.base + S.score * CFG.scroll.perScore, CFG.scroll.max);
+  const dy = speed * dt;
+  S.grid = (S.grid + dy) % 40;
+
+  /* movimiento del escuadrón */
+  if (S.keyDir) S.targetX += S.keyDir * CFG.squad.keySpeed * dt;
+  const half = formation(S.soldiers).half + CFG.squad.pad;
+  S.targetX = Math.max(half, Math.min(W - half, S.targetX));
+  S.squadX += (S.targetX - S.squadX) * Math.min(1, CFG.squad.follow * dt);
+  S.squadX = Math.max(half, Math.min(W - half, S.squadX));
+
+  /* filas */
+  for (const r of S.rows) r.y += dy;
+  S.topY += dy;
+
+  for (let i = S.rows.length - 1; i >= 0; i--) {
+    const r = S.rows[i];
+    if (r.type === 'gate') {
+      if (!r.used && r.y + CFG.gate.h * 0.5 >= CFG.squad.y) {
+        applyGate(r);
+        if (S.mode !== 'play') return;
+      }
+      if (r.y > H + CFG.gate.h) S.rows.splice(i, 1);
+    } else {
+      // Un bloque que llega a la línea resta tantos soldados como resistencia le quede
+      for (let j = r.blocks.length - 1; j >= 0; j--) {
+        const b = r.blocks[j];
+        if (r.y + CFG.enemy.h >= CFG.squad.y) {
+          S.soldiers = Math.max(0, S.soldiers - b.hp);
+          burst(b.x + b.w / 2, CFG.squad.y, '#ff5a5a', CFG.fx.particles);
+          flash('rgba(255,90,90,');
+          S.shake = CFG.fx.shakeTime;
+          r.blocks.splice(j, 1);
+          syncHud();
+          if (S.soldiers <= 0) { gameOver(); return; }
+        }
+      }
+      if (r.y > H + CFG.enemy.h) S.rows.splice(i, 1);
+    }
+  }
+  while (S.topY > -CFG.rowGap) spawnRow();
+
+  /* disparo automático */
+  S.fireT -= dt;
+  if (S.fireT <= 0) {
+    S.fireT = CFG.bullet.interval;
+    const cannons = Math.max(1, Math.min(CFG.bullet.maxCannons,
+                    1 + Math.floor(S.soldiers / CFG.bullet.soldiersPerCannon)));
+    const spread = formation(S.soldiers).half;
+    for (let i = 0; i < cannons; i++) {
+      const t = cannons === 1 ? 0.5 : i / (cannons - 1);
+      S.bullets.push({ x: S.squadX - spread + t * spread * 2, y: CFG.squad.y - 14 });
+    }
+  }
+
+  /* balas y colisiones */
+  for (let i = S.bullets.length - 1; i >= 0; i--) {
+    const b = S.bullets[i];
+    b.y -= CFG.bullet.speed * dt;
+    if (b.y < -CFG.bullet.h) { S.bullets.splice(i, 1); continue; }
+    let gone = false;
+    for (const r of S.rows) {
+      if (r.type !== 'enemy') continue;
+      if (b.y > r.y + CFG.enemy.h || b.y + CFG.bullet.h < r.y) continue;
+      for (const e of r.blocks) {
+        if (b.x + CFG.bullet.w / 2 > e.x && b.x - CFG.bullet.w / 2 < e.x + e.w) {
+          damage(e, r, b.x, b.y); gone = true; break;
+        }
+      }
+      if (gone) break;
+    }
+    if (gone) S.bullets.splice(i, 1);
+  }
+
+  /* partículas, destello y sacudida */
+  for (let i = S.parts.length - 1; i >= 0; i--) {
+    const p = S.parts[i];
+    p.t += dt;
+    if (p.t >= p.life) { S.parts.splice(i, 1); continue; }
+    p.x += p.vx * dt; p.y += p.vy * dt; p.vy += 260 * dt;
+  }
+  if (S.flash > 0) S.flash -= dt;
+  if (S.shake > 0) S.shake -= dt;
+}
+
+/* ============================================================
+   6. Render
+   ============================================================ */
+function draw() {
+  ctx.setTransform(scaleX, 0, 0, scaleY, 0, 0);
+  if (S.shake > 0) {
+    const m = CFG.fx.shakeMag * (S.shake / CFG.fx.shakeTime);
+    ctx.translate(rnd(-m, m), rnd(-m, m));
+  }
+
+  const g = ctx.createLinearGradient(0, 0, 0, H);
+  g.addColorStop(0, '#0d1a3d'); g.addColorStop(1, '#04081a');
+  ctx.fillStyle = g; ctx.fillRect(-20, -20, W + 40, H + 40);
+
+  ctx.strokeStyle = 'rgba(90,140,230,.10)'; ctx.lineWidth = 1;
+  ctx.beginPath();
+  for (let x = 0; x <= W; x += 40) { ctx.moveTo(x, 0); ctx.lineTo(x, H); }
+  for (let y = S.grid - 40; y <= H; y += 40) { ctx.moveTo(0, y); ctx.lineTo(W, y); }
+  ctx.stroke();
+
+  for (const r of S.rows) { if (r.type === 'gate') drawGate(r); else drawEnemies(r); }
+
+  ctx.strokeStyle = 'rgba(63,240,255,.16)';
+  ctx.beginPath(); ctx.moveTo(0, CFG.squad.y + 6); ctx.lineTo(W, CFG.squad.y + 6); ctx.stroke();
+
+  ctx.fillStyle = '#ffd24a'; ctx.shadowColor = '#ffd24a'; ctx.shadowBlur = 8;
+  for (const b of S.bullets) ctx.fillRect(b.x - CFG.bullet.w / 2, b.y, CFG.bullet.w, CFG.bullet.h);
+  ctx.shadowBlur = 0;
+
+  drawSquad();
+
+  for (const p of S.parts) {
+    ctx.globalAlpha = 1 - p.t / p.life;
+    ctx.fillStyle = p.color;
+    ctx.fillRect(p.x - 1.5, p.y - 1.5, 3, 3);
+  }
+  ctx.globalAlpha = 1;
+
+  if (S.flash > 0 && S.flashColor) {
+    ctx.fillStyle = S.flashColor + (0.3 * (S.flash / CFG.fx.flash)).toFixed(3) + ')';
+    ctx.fillRect(-20, -20, W + 40, H + 40);
+  }
+}
+
+function drawGate(r) {
+  const h = CFG.gate.h, hw = W / 2;
+  ctx.font = '700 26px Bahnschrift, "Arial Narrow", sans-serif';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  for (let s = 0; s < 2; s++) {
+    const d = s === 0 ? r.left : r.right;
+    const x = s * hw;
+    const c = d.good ? '61,255,158' : '255,154,60';
+    ctx.fillStyle = 'rgba(' + c + ',.16)';
+    ctx.fillRect(x, r.y, hw, h);
+    ctx.strokeStyle = 'rgba(' + c + ',.85)'; ctx.lineWidth = 2;
+    ctx.strokeRect(x + 1, r.y + 1, hw - 2, h - 2);
+    ctx.fillStyle = 'rgb(' + c + ')';
+    ctx.shadowColor = 'rgb(' + c + ')'; ctx.shadowBlur = 12;
+    ctx.fillText(d.op + d.val, x + hw / 2, r.y + h / 2);
+    ctx.shadowBlur = 0;
+  }
+}
+
+function drawEnemies(r) {
+  const h = CFG.enemy.h;
+  for (const e of r.blocks) {
+    ctx.fillStyle = 'rgba(255,63,168,.20)';
+    ctx.fillRect(e.x, r.y, e.w, h);
+    ctx.strokeStyle = 'rgba(255,63,168,.9)'; ctx.lineWidth = 2;
+    ctx.strokeRect(e.x + 1, r.y + 1, e.w - 2, h - 2);
+
+    const ratio = e.hp / e.maxHp;
+    ctx.fillStyle = 'rgba(0,0,0,.35)';
+    ctx.fillRect(e.x + 4, r.y + h - 9, e.w - 8, 4);
+    ctx.fillStyle = '#ff3fa8';
+    ctx.fillRect(e.x + 4, r.y + h - 9, (e.w - 8) * ratio, 4);
+
+    ctx.fillStyle = '#ffe6f4';
+    ctx.font = '700 22px Bahnschrift, "Arial Narrow", sans-serif';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(e.hp, e.x + e.w / 2, r.y + h / 2 - 3);
+  }
+}
+
+function drawSquad() {
+  const f = formation(S.soldiers);
+  const w = CFG.squad.soldierW, hh = CFG.squad.soldierH;
+  ctx.shadowColor = '#3ff0ff'; ctx.shadowBlur = 10;
+  for (const p of f.pts) {
+    const x = S.squadX + p.x - w / 2, y = CFG.squad.y + p.y - hh;
+    ctx.fillStyle = '#3ff0ff';
+    ctx.fillRect(x, y + 3, w, hh - 3);
+    ctx.fillStyle = '#d9fbff';
+    ctx.fillRect(x + 1.5, y, w - 3, 4);
+  }
+  ctx.shadowBlur = 0;
+}
+
+/* ============================================================
+   7. Controles
+   ============================================================ */
+let dragId = null, dragX = 0;
+
+cv.addEventListener('pointerdown', e => {
+  if (S.mode !== 'play') return;
+  dragId = e.pointerId; dragX = e.clientX;
+  cv.setPointerCapture(dragId);
+});
+cv.addEventListener('pointermove', e => {
+  if (dragId !== e.pointerId || S.mode !== 'play') return;
+  const r = cv.getBoundingClientRect();
+  S.targetX += (e.clientX - dragX) * (W / r.width);
+  dragX = e.clientX;
+});
+function endDrag(e) {
+  if (dragId === e.pointerId) { cv.releasePointerCapture(dragId); dragId = null; }
+}
+cv.addEventListener('pointerup', endDrag);
+cv.addEventListener('pointercancel', endDrag);
+
+window.addEventListener('keydown', e => {
+  if (e.key === 'ArrowLeft')  { S.keyDir = -1; e.preventDefault(); }
+  if (e.key === 'ArrowRight') { S.keyDir =  1; e.preventDefault(); }
+  if ((e.key === 'Enter' || e.key === ' ') && S.mode !== 'play') startGame();
+});
+window.addEventListener('keyup', e => {
+  if ((e.key === 'ArrowLeft' && S.keyDir === -1) || (e.key === 'ArrowRight' && S.keyDir === 1)) S.keyDir = 0;
+});
+
+function startGame() {
+  reset();
+  el.start.hidden = true;
+  el.end.hidden   = true;
+  S.mode = 'play';
+}
+
+function gameOver() {
+  S.mode = 'over';
+  S.soldiers = 0;
+  syncHud();
+  if (S.score > S.best) { S.best = S.score; saveBest(S.best); }
+  el.final.textContent = S.score;
+  el.best.textContent  = S.best;
+  el.end.hidden = false;
+}
+
+document.getElementById('btnStart').addEventListener('click', startGame);
+document.getElementById('btnRetry').addEventListener('click', startGame);
+
+/* ============================================================
+   8. Bucle principal (delta time)
+   ============================================================ */
+let last = performance.now();
+function loop(now) {
+  const dt = Math.min((now - last) / 1000, 0.05);
+  last = now;
+  if (S.mode === 'play') update(dt);
+  draw();
+  requestAnimationFrame(loop);
+}
+
+S.best = loadBest();
+resize();
+reset();
+requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>
