@@ -4,6 +4,12 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Macedonia — Arcade</title>
+<link rel="manifest" href="./manifest.webmanifest">
+<meta name="theme-color" content="#050a1a">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="apple-touch-icon" href="./icon.svg">
 <style>
   :root{
     --bg:#050a1a; --panel:#0b1330; --line:#1b2a55;
@@ -96,7 +102,7 @@
   <div class="grid" id="grid"></div>
 </main>
 
-<footer>Sin instalar &middot; Sin servidor &middot; Solo abrir y jugar</footer>
+<footer>Instalable &middot; Sin servidor &middot; Funciona sin conexión</footer>
 
 <script>
 (() => {
@@ -126,11 +132,37 @@ const GAMES = [
               <rect x="108" y="74" width="8" height="11"/>
             </g>
           </svg>`
+  },
+  {
+    slug: 'convoy',
+    name: 'Convoy',
+    accent: '#ffb03a',
+    tag: 'Jugable',
+    desc: 'Aguanta la carretera: las puertas suben tu potencia de fuego y la horda te quita vida.',
+    art: `<svg viewBox="0 0 200 104" xmlns="http://www.w3.org/2000/svg">
+            <rect width="200" height="104" fill="#d8d2c4"/>
+            <path d="M60 104 L84 30 L116 30 L140 104 Z" fill="#74777c"/>
+            <path d="M96 104 L99 30 L101 30 L104 104 Z" fill="#efece4" opacity=".85"/>
+            <path d="M60 104 L84 30 L88 30 L68 104 Z" fill="#c2b294"/>
+            <path d="M140 104 L116 30 L112 30 L132 104 Z" fill="#c2b294"/>
+            <rect x="78" y="40" width="20" height="11" rx="2" fill="rgba(74,222,128,.3)" stroke="#4ade80"/>
+            <rect x="102" y="40" width="20" height="11" rx="2" fill="rgba(255,138,60,.3)" stroke="#ff8a3c"/>
+            <g fill="#e8564d">
+              <rect x="88" y="24" width="5" height="8" rx="1.5"/>
+              <rect x="97" y="24" width="5" height="8" rx="1.5"/>
+              <rect x="106" y="24" width="5" height="8" rx="1.5"/>
+            </g>
+            <path d="M97 88 L99 60 L101 60 L103 88 Z" fill="#9fe8ff" opacity=".85"/>
+            <g fill="#4a90d9">
+              <rect x="94" y="86" width="12" height="14" rx="3"/>
+            </g>
+            <circle cx="100" cy="83" r="5" fill="#f6cba4"/>
+            <path d="M95 82 a5 5 0 0 1 10 0 z" fill="#1f6f9e"/>
+          </svg>`
   }
 ];
 
 const SOON = [
-  { name: 'Próximamente', desc: 'Hueco reservado para el siguiente juego de la colección.' },
   { name: 'Próximamente', desc: 'Hueco reservado para el siguiente juego de la colección.' }
 ];
 
@@ -160,6 +192,15 @@ for (const s of SOON) {
   grid.appendChild(d);
 }
 })();
+</script>
+<script>
+  /* Registro del service worker: sin el, Chrome no ofrece instalar en Android.
+     Falla a proposito en file://, asi que se comprueba antes. */
+  if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('./sw.js').catch(() => {});
+    });
+  }
 </script>
 </body>
 </html>

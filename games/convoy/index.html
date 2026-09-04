@@ -1,0 +1,1085 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>Convoy</title>
+<link rel="manifest" href="../../manifest.webmanifest">
+<meta name="theme-color" content="#0a0710">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="apple-touch-icon" href="../../icon.svg">
+<style>
+  :root{
+    --bg:#0a0710;
+    --amber:#ffb03a; --red:#ff4d4d; --green:#4ade80; --orange:#ff8a3c; --sky:#6ad4ff;
+    --text:#fff3e4; --dim:#b09a86;
+    --font:"Bahnschrift","DIN Condensed","Roboto Condensed","Arial Narrow",system-ui,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{
+    margin:0; background:radial-gradient(120% 80% at 50% 0%, #3a2410 0%, var(--bg) 70%);
+    color:var(--text); font-family:var(--font);
+    display:flex; align-items:center; justify-content:center;
+    overflow:hidden; -webkit-tap-highlight-color:transparent;
+  }
+  #stage{
+    position:relative; width:min(100vw, 56.25vh); height:min(177.78vw, 100vh);
+    touch-action:none; user-select:none;
+    box-shadow:0 0 0 1px #3c2a18, 0 20px 60px rgba(0,0,0,.65);
+    overflow:hidden;
+  }
+  canvas{display:block; width:100%; height:100%}
+
+  /* HUD */
+  #hud{position:absolute; inset:0 0 auto 0; padding:14px 16px; pointer-events:none}
+  .top{display:flex; justify-content:space-between; font-variant-numeric:tabular-nums}
+  .stat{display:flex; flex-direction:column; line-height:1}
+  .stat.right{align-items:flex-end}
+  .stat .k{font-size:11px; letter-spacing:.18em; text-transform:uppercase; color:var(--dim)}
+  .stat .v{font-size:30px; font-weight:700; margin-top:4px; text-shadow:0 0 14px currentColor}
+  #power{color:var(--amber)}
+  #score{color:var(--sky)}
+
+  #hpWrap{
+    margin-top:12px; height:9px; border-radius:99px; background:rgba(0,0,0,.45);
+    border:1px solid rgba(255,176,58,.35); overflow:hidden;
+  }
+  #hpBar{
+    height:100%; width:100%; border-radius:99px;
+    background:linear-gradient(90deg,#ff4d4d,#ffb03a);
+    transition:width .12s linear;
+  }
+  #ramWrap{
+    margin-top:7px; font-size:11px; letter-spacing:.2em; text-transform:uppercase;
+    color:var(--sky); text-shadow:0 0 12px currentColor;
+  }
+  #ramWrap[hidden]{display:none}
+
+  /* Overlays */
+  .overlay{
+    position:absolute; inset:0; display:flex; flex-direction:column;
+    align-items:center; justify-content:center; gap:14px; text-align:center; padding:28px;
+    background:linear-gradient(180deg, rgba(10,7,16,.72), rgba(10,7,16,.95));
+    animation:fade .25s ease both;
+  }
+  .overlay[hidden]{display:none}
+  h1{
+    margin:0; font-size:46px; letter-spacing:.16em; text-transform:uppercase; font-weight:800;
+    color:var(--amber); text-shadow:0 0 28px rgba(255,176,58,.55);
+  }
+  h2{margin:0; font-size:28px; letter-spacing:.12em; text-transform:uppercase; color:var(--red);
+     text-shadow:0 0 22px rgba(255,77,77,.45)}
+  p{margin:0; max-width:290px; color:var(--dim); font-size:14px; line-height:1.6}
+  p b{color:var(--text); font-weight:600}
+  .scores{display:flex; gap:34px; margin:6px 0 2px}
+  .scores div{display:flex; flex-direction:column; gap:6px}
+  .scores span{font-size:11px; letter-spacing:.18em; text-transform:uppercase; color:var(--dim)}
+  .scores strong{font-size:34px; font-weight:800; color:var(--sky); font-variant-numeric:tabular-nums}
+  button{
+    margin-top:8px; font-family:var(--font); font-size:17px; font-weight:700;
+    letter-spacing:.16em; text-transform:uppercase; color:#1a0e02;
+    background:linear-gradient(180deg,#ffd07a, var(--amber)); border:0; border-radius:999px;
+    padding:14px 40px; cursor:pointer; box-shadow:0 0 30px rgba(255,176,58,.35);
+    transition:transform .12s ease, box-shadow .12s ease;
+  }
+  button:hover{transform:translateY(-2px); box-shadow:0 0 40px rgba(255,176,58,.5)}
+  button:active{transform:translateY(0)}
+  .back{
+    position:absolute; left:14px; bottom:14px; font-size:12px; letter-spacing:.16em;
+    text-transform:uppercase; color:var(--dim); text-decoration:none; z-index:5;
+  }
+  .back:hover{color:var(--amber)}
+  @keyframes fade{from{opacity:0}to{opacity:1}}
+  @media (prefers-reduced-motion:reduce){
+    .overlay{animation:none} button{transition:none} #hpBar{transition:none}
+  }
+</style>
+</head>
+<body>
+<div id="stage">
+  <canvas id="cv"></canvas>
+
+  <div id="hud">
+    <div class="top">
+      <div class="stat"><span class="k">Potencia</span><span class="v" id="power">5</span></div>
+      <div class="stat right"><span class="k">Puntos</span><span class="v" id="score">0</span></div>
+    </div>
+    <div id="hpWrap"><div id="hpBar"></div></div>
+    <div id="ramWrap" hidden>▲ Moto — arrollando</div>
+  </div>
+
+  <div class="overlay" id="startScreen">
+    <h1>Convoy</h1>
+    <p>Aguanta la carretera. Las puertas cambian tu <b>potencia</b> de fuego;
+       los enemigos que te alcanzan te quitan <b>vida</b>.<br>
+       Los barriles paran tus balas: muévete para tener línea de tiro.</p>
+    <button id="btnStart">Empezar</button>
+  </div>
+
+  <div class="overlay" id="endScreen" hidden>
+    <h2>Te han desbordado</h2>
+    <div class="scores">
+      <div><span>Puntos</span><strong id="finalScore">0</strong></div>
+      <div><span>Récord</span><strong id="bestScore">0</strong></div>
+    </div>
+    <button id="btnRetry">Reintentar</button>
+  </div>
+
+  <a class="back" href="../../index.html">&larr; Menú</a>
+</div>
+
+<script>
+(() => {
+'use strict';
+
+/* ============================================================
+   1. CFG - todas las constantes de balance
+   ============================================================ */
+const CFG = {
+  world: { w: 360, h: 640 },
+
+  /* Cámara: perspectiva falsa, p = near/(z+near).
+     'near' alto = fuga suave. El horizonte va FUERA de pantalla (negativo) para que
+     la calzada salga por el borde superior en vez de converger en un punto visible. */
+  cam: { horizon: -70, near: 820, playerY: 545 },
+
+  road: {
+    half: 150,            // media anchura de la calzada en unidades de mundo
+    walk: 120,            // ancho de la acera a cada lado
+    kerbH: 13,            // alto del bordillo
+    back: -220,           // z por detrás del jugador hasta donde se dibuja el asfalto
+    far: 1500,            // z de aparición de los eventos
+    segLen: 140,          // largo de cada tramo (da la sensación de avance)
+    segCount: 25,         // tramos con detalle; más allá va una pieza única velada
+    drawFar: 6400,        // z donde la calzada alcanza el borde superior de la pantalla
+    dashLen: 0.45,        // fracción del tramo que ocupa la raya discontinua
+    postGap: 420, postH: 130, postCount: 8,
+    wallH: 40             // murete sobre la acera
+  },
+
+  player: {
+    moveSpeed: 300,       // px/s con teclado
+    follow: 14,           // suavizado hacia la posición objetivo
+    pad: 20,              // margen contra los quitamiedos
+    maxHp: 100
+  },
+
+  fire: {
+    interval: 0.13,       // segundos entre ráfagas
+    bulletSpeed: 2600,    // unidades de z por segundo
+    /* La potencia compra ANCHO de fuego, no solo daño. Con chorros juntos, la
+       multitud se reparte por toda la calzada y la mayoría nunca entra en la
+       línea de tiro: subir la potencia no servía de nada. */
+    streamGap: 26,        // separación lateral entre cañones
+    maxStreams: 9,        // cañones simultáneos como máximo
+    powerPerStream: 5     // un cañón más por cada N de potencia
+  },
+
+  gate: {
+    start: 5,             // potencia inicial
+    minPower: 1,          // suelo: sin pegada, pero la partida sigue
+    h: 78,
+    safeRows: 2,          // primeras puertas sin lado malo
+    goodPairChance: 0.34, // parejas con las dos puertas buenas pero desiguales
+    mulChance: 0.17,      // cuántas buenas son xN: subirlo dispara el crecimiento exponencial
+    add: [3, 14],
+    mul: [2, 3],
+    subPct: [0.3, 0.75],  // -N como fracción de la potencia, no un valor fijo
+    subMin: 2,
+    div: [2, 3]
+  },
+
+  enemy: {
+    baseHp: 3,
+    /* Ojo con hpPerPower: si la resistencia escala con tu potencia tanto como el daño,
+       la partida se vuelve invariante de escala y las puertas dejan de importar.
+       Se queda bajo a propósito; la dificultad la lleva el número de enemigos. */
+    hpPerPower: 0.07,
+    hpPerDist: 0.0016,    // crece con la distancia recorrida
+    minCount: 7, maxCount: 30,
+    countPerDist: 0.0045,
+    dmgPerHp: 0.85,       // vida que te quita cada enemigo que llega, según su resistencia
+    w: 24, depth: 32, rowGap: 44, cols: 7
+  },
+
+  barrel: {
+    baseHp: 7,
+    hpPerPower: 0.45,
+    minCount: 1, maxCount: 2,
+    dmg: 20,              // vida que te quita si llega entero
+    blastR: 78, blastDmg: 5,
+    w: 62, depth: 48
+  },
+
+  pickup: {
+    chance: 0.2,          // probabilidad de que una ranura de peligro traiga moto
+    ramSec: 4.5,          // segundos arrollando
+    w: 44, depth: 40
+  },
+
+  scroll: {
+    base: 235,            // velocidad de avance inicial (unidades z/s)
+    perDist: 0.011,       // aceleración con la distancia
+    max: 520
+  },
+
+  slotGap: 330,           // separación en z entre eventos generados
+  startRunwaySec: 3.2,    // margen antes del primer evento
+  hazardBarrelChance: 0.3,// qué parte de las ranuras de peligro son barriles
+
+  fx: { particles: 14, flash: 0.3, shakeTime: 0.3, shakeMag: 8 },
+  storageKey: 'macedonia.convoy.best'
+};
+
+const W = CFG.world.w, H = CFG.world.h;
+
+/* ============================================================
+   2. Canvas, escalado y proyección
+   ============================================================ */
+const cv  = document.getElementById('cv');
+const ctx = cv.getContext('2d');
+let scaleX = 1, scaleY = 1;
+
+function resize() {
+  const r   = cv.getBoundingClientRect();
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  cv.width  = Math.max(1, Math.round(r.width  * dpr));
+  cv.height = Math.max(1, Math.round(r.height * dpr));
+  scaleX = cv.width  / W;
+  scaleY = cv.height / H;
+  ctx.setTransform(scaleX, 0, 0, scaleY, 0, 0);
+}
+window.addEventListener('resize', resize);
+
+// Perspectiva: todo el juego trabaja en (x lateral, z profundidad) y se proyecta aquí
+function persp(z) { return CFG.cam.near / (z + CFG.cam.near); }
+function projY(p) { return CFG.cam.horizon + (CFG.cam.playerY - CFG.cam.horizon) * p; }
+function projX(x, p) { return W / 2 + x * p; }
+
+/* Niebla de distancia. Es el truco que más hace por la sensación de profundidad:
+   sin ella, un enemigo lejano es idéntico a uno cercano salvo por el tamaño. */
+const FOG = { r: 214, g: 208, b: 194 };   // bruma diurna: hacia ella tiende todo lo lejano
+const fogCache = new Map();
+
+function fogged(hex, p) {
+  const q = Math.round(Math.min(1, Math.max(0, p)) * 40);   // cuantizado: evita recalcular por frame
+  const key = hex + q;
+  let c = fogCache.get(key);
+  if (c) return c;
+  const t = Math.min(0.72, Math.pow(1 - q / 40, 1.7) * 0.85);
+  const n = parseInt(hex.slice(1), 16);
+  const r = Math.round(((n >> 16) & 255) * (1 - t) + FOG.r * t);
+  const g = Math.round(((n >> 8) & 255)  * (1 - t) + FOG.g * t);
+  const b = Math.round((n & 255)         * (1 - t) + FOG.b * t);
+  c = 'rgb(' + r + ',' + g + ',' + b + ')';
+  fogCache.set(key, c);
+  return c;
+}
+
+/* ============================================================
+   3. Estado y reinicio
+   ============================================================ */
+const S = {
+  mode: 'menu',            // 'menu' | 'play' | 'over'
+  x: 0, targetX: 0,        // posición lateral del jugador
+  power: CFG.gate.start,
+  hp: CFG.player.maxHp,
+  score: 0,
+  best: 0,
+  dist: 0,                 // distancia total recorrida: reloj de dificultad
+  ram: 0,                  // segundos restantes de moto
+  enemies: [], barrels: [], gates: [], pickups: [], bullets: [], parts: [],
+  fireT: 0,
+  slot: 0,                 // índice del próximo evento
+  nextZ: 0,                // z donde se generará
+  flash: 0, flashColor: null,
+  shake: 0,
+  keyDir: 0
+};
+
+const el = {
+  power: document.getElementById('power'),
+  score: document.getElementById('score'),
+  hp:    document.getElementById('hpBar'),
+  ram:   document.getElementById('ramWrap'),
+  start: document.getElementById('startScreen'),
+  end:   document.getElementById('endScreen'),
+  final: document.getElementById('finalScore'),
+  best:  document.getElementById('bestScore')
+};
+
+function loadBest() {
+  try { return parseInt(localStorage.getItem(CFG.storageKey), 10) || 0; }
+  catch (err) { return 0; }
+}
+function saveBest(v) {
+  try { localStorage.setItem(CFG.storageKey, String(v)); }
+  catch (err) { /* almacenamiento bloqueado: seguir jugando */ }
+}
+
+function syncHud() {
+  el.power.textContent = S.power;
+  el.score.textContent = S.score;
+  el.hp.style.width = Math.max(0, S.hp / CFG.player.maxHp * 100) + '%';
+  el.ram.hidden = S.ram <= 0;
+}
+
+function reset() {
+  S.x = S.targetX = 0;
+  S.power = CFG.gate.start;
+  S.hp = CFG.player.maxHp;
+  S.score = 0; S.dist = 0; S.ram = 0;
+  S.enemies.length = S.barrels.length = S.gates.length = 0;
+  S.pickups.length = S.bullets.length = S.parts.length = 0;
+  S.fireT = 0; S.slot = 0;
+  S.flash = 0; S.flashColor = null; S.shake = 0; S.keyDir = 0;
+  // El primer evento llega con margen para colocarse
+  S.nextZ = CFG.scroll.base * CFG.startRunwaySec;
+  while (S.nextZ < CFG.road.far) spawnSlot();
+  syncHud();
+}
+
+/* ============================================================
+   4. Generación de eventos
+   ============================================================ */
+const rnd  = (a, b) => a + Math.random() * (b - a);
+const rndi = (a, b) => Math.floor(rnd(a, b + 1));
+
+function goodOp() {
+  return Math.random() < CFG.gate.mulChance
+    ? { op: '×', val: rndi(CFG.gate.mul[0], CFG.gate.mul[1]), good: true }
+    : { op: '+', val: rndi(CFG.gate.add[0], CFG.gate.add[1]), good: true };
+}
+function badOp() {
+  if (Math.random() < 0.5) {
+    const pct = rnd(CFG.gate.subPct[0], CFG.gate.subPct[1]);
+    return { op: '−', val: Math.max(CFG.gate.subMin, Math.round(S.power * pct)), good: false };
+  }
+  return { op: '÷', val: rndi(CFG.gate.div[0], CFG.gate.div[1]), good: false };
+}
+
+function addGate(z, safe) {
+  let left, right;
+  if (safe || Math.random() < CFG.gate.goodPairChance) {
+    left = goodOp(); right = goodOp();
+    if (left.op === right.op && left.val === right.val) right.val += 1;
+  } else {
+    left = goodOp(); right = badOp();
+    if (Math.random() < 0.5) { const t = left; left = right; right = t; }
+  }
+  S.gates.push({ z, left, right, used: false });
+}
+
+function enemyHp() {
+  return Math.max(1, Math.round(
+    CFG.enemy.baseHp + S.power * CFG.enemy.hpPerPower + S.dist * CFG.enemy.hpPerDist));
+}
+
+function addWave(z) {
+  const n = Math.min(CFG.enemy.maxCount,
+            CFG.enemy.minCount + Math.floor(S.dist * CFG.enemy.countPerDist));
+  const cols = Math.min(CFG.enemy.cols, n);
+  const spread = CFG.road.half * 0.78;
+  for (let i = 0; i < n; i++) {
+    const c = i % cols, r = Math.floor(i / cols);
+    const x = cols === 1 ? 0 : -spread + (c / (cols - 1)) * spread * 2;
+    const hp = enemyHp();
+    S.enemies.push({ x: x + rnd(-8, 8), z: z + r * CFG.enemy.rowGap, hp, maxHp: hp });
+  }
+}
+
+function addBarrels(z) {
+  const n = rndi(CFG.barrel.minCount, CFG.barrel.maxCount);
+  const spread = CFG.road.half * 0.6;
+  for (let i = 0; i < n; i++) {
+    const x = n === 1 ? rnd(-spread, spread)
+                      : -spread + (i / (n - 1)) * spread * 2;
+    const hp = Math.max(1, Math.round(CFG.barrel.baseHp + S.power * CFG.barrel.hpPerPower));
+    S.barrels.push({ x, z, hp, maxHp: hp });
+  }
+}
+
+// Las ranuras alternan puerta y peligro; las dos primeras puertas son seguras
+function spawnSlot() {
+  const z = S.nextZ;
+  if (S.slot % 2 === 0) {
+    addGate(z, S.slot / 2 < CFG.gate.safeRows);
+  } else {
+    if (Math.random() < CFG.hazardBarrelChance) addBarrels(z);
+    else addWave(z);
+    if (Math.random() < CFG.pickup.chance) {
+      S.pickups.push({ x: rnd(-CFG.road.half * 0.6, CFG.road.half * 0.6), z: z + CFG.enemy.rowGap * 2 });
+    }
+  }
+  S.nextZ += CFG.slotGap;
+  S.slot++;
+}
+
+/* Efectos (partículas en coordenadas de pantalla) */
+function burst(sx, sy, color, n, spd) {
+  for (let i = 0; i < n; i++) {
+    const a = rnd(0, Math.PI * 2), s = rnd(30, spd);
+    S.parts.push({ x: sx, y: sy, vx: Math.cos(a) * s, vy: Math.sin(a) * s,
+                   life: rnd(.25, .6), t: 0, color });
+  }
+}
+function flash(color) { S.flash = CFG.fx.flash; S.flashColor = color; }
+
+/* ============================================================
+   5. Update
+   ============================================================ */
+function streams() {
+  return Math.max(1, Math.min(CFG.fire.maxStreams,
+         1 + Math.floor(S.power / CFG.fire.powerPerStream)));
+}
+// El daño total crece con la potencia aunque los cañones dibujados estén topados
+function bulletDamage() { return Math.max(1, Math.round(S.power / streams())); }
+
+function applyGate(g) {
+  const d = S.x < 0 ? g.left : g.right;
+  const before = S.power;
+  switch (d.op) {
+    case '+': S.power += d.val; break;
+    case '×': S.power *= d.val; break;
+    case '−': S.power -= d.val; break;
+    case '÷': S.power = Math.floor(S.power / d.val); break;
+  }
+  S.power = Math.max(CFG.gate.minPower, Math.round(S.power));
+  g.used = true;
+  const up = S.power > before;
+  burst(projX(S.x, 1), projY(1) - 30, up ? '#4ade80' : '#ff8a3c', CFG.fx.particles, 190);
+  flash(up ? 'rgba(74,222,128,' : 'rgba(255,138,60,');
+  syncHud();
+}
+
+function hurt(amount, sx) {
+  if (S.ram > 0) return;
+  S.hp -= amount;
+  S.shake = CFG.fx.shakeTime;
+  flash('rgba(255,77,77,');
+  burst(sx, projY(1) - 20, '#ff4d4d', CFG.fx.particles, 200);
+  syncHud();
+  if (S.hp <= 0) { S.hp = 0; gameOver(); }
+}
+
+/* Las bajas se marcan y se compactan al final del frame: quitar del array a mitad
+   de un recorrido es la vía rápida a saltarse elementos. */
+function killEnemy(e) {
+  if (e.dead) return;
+  e.dead = true;
+  S.score += e.maxHp * 2;
+  const p = persp(e.z);
+  burst(projX(e.x, p), projY(p), '#ff4d4d', 8, 150);
+}
+
+function blowBarrel(b) {
+  if (b.dead) return;
+  b.dead = true;
+  S.score += b.maxHp * 3;
+  const p = persp(b.z);
+  burst(projX(b.x, p), projY(p), '#ffb03a', CFG.fx.particles, 220);
+  // La explosión daña a los enemigos cercanos: los barriles son un arma, no solo un estorbo
+  for (const e of S.enemies) {
+    if (e.dead) continue;
+    if (Math.abs(e.z - b.z) < CFG.barrel.blastR && Math.abs(e.x - b.x) < CFG.barrel.blastR) {
+      e.hp -= CFG.barrel.blastDmg;
+      if (e.hp <= 0) killEnemy(e);
+    }
+  }
+}
+
+function update(dt) {
+  const speed = Math.min(CFG.scroll.base + S.dist * CFG.scroll.perDist, CFG.scroll.max);
+  const dz = speed * dt;
+  S.dist += dz;
+  if (S.ram > 0) { S.ram -= dt; if (S.ram <= 0) syncHud(); }
+
+  /* movimiento lateral */
+  if (S.keyDir) S.targetX += S.keyDir * CFG.player.moveSpeed * dt;
+  const lim = CFG.road.half - CFG.player.pad;
+  S.targetX = Math.max(-lim, Math.min(lim, S.targetX));
+  S.x += (S.targetX - S.x) * Math.min(1, CFG.player.follow * dt);
+
+  /* todo avanza hacia el jugador */
+  for (const g of S.gates)   g.z -= dz;
+  for (const e of S.enemies) e.z -= dz;
+  for (const b of S.barrels) b.z -= dz;
+  for (const k of S.pickups) k.z -= dz;
+  S.nextZ -= dz;
+  while (S.nextZ < CFG.road.far) spawnSlot();
+
+  /* puertas */
+  for (let i = S.gates.length - 1; i >= 0; i--) {
+    const g = S.gates[i];
+    if (!g.used && g.z <= 0) applyGate(g);
+    if (g.z < CFG.road.back) S.gates.splice(i, 1);
+  }
+
+  /* enemigos que alcanzan la línea */
+  for (let i = S.enemies.length - 1; i >= 0; i--) {
+    const e = S.enemies[i];
+    if (e.dead || e.z > 0) continue;
+    if (S.ram > 0) { killEnemy(e); continue; }
+    hurt(e.hp * CFG.enemy.dmgPerHp, projX(e.x, 1));
+    S.enemies.splice(i, 1);
+    if (S.mode !== 'play') return;
+  }
+
+  /* barriles que llegan enteros */
+  for (let i = S.barrels.length - 1; i >= 0; i--) {
+    const b = S.barrels[i];
+    if (b.dead || b.z > 0) continue;
+    if (S.ram > 0) { blowBarrel(b); continue; }
+    hurt(CFG.barrel.dmg, projX(b.x, 1));
+    S.barrels.splice(i, 1);
+    if (S.mode !== 'play') return;
+  }
+
+  /* recogidas */
+  for (let i = S.pickups.length - 1; i >= 0; i--) {
+    const k = S.pickups[i];
+    if (k.z > 0) continue;
+    if (Math.abs(k.x - S.x) < CFG.pickup.w) {
+      S.ram = CFG.pickup.ramSec;
+      burst(projX(k.x, 1), projY(1) - 20, '#6ad4ff', CFG.fx.particles, 200);
+      flash('rgba(106,212,255,');
+      syncHud();
+    }
+    S.pickups.splice(i, 1);
+  }
+
+  /* disparo */
+  S.fireT -= dt;
+  if (S.fireT <= 0) {
+    S.fireT = CFG.fire.interval;
+    const n = streams();
+    for (let i = 0; i < n; i++) {
+      const t = n === 1 ? 0 : (i / (n - 1) - 0.5) * 2;
+      S.bullets.push({ x: S.x + t * (n - 1) * CFG.fire.streamGap * 0.5, z: 10 });
+    }
+  }
+
+  /* Balas. Dos cosas que no son obvias:
+     - Recorrido barrido, no comprobación puntual: a 2600 z/s una bala avanza 43
+       unidades por frame y un enemigo mide 32 de fondo, así que un test puntual
+       los atraviesa sin registrar nada.
+     - Perforación: el daño sobrante pasa al siguiente. Sin esto, cada bala mata
+       como mucho a uno y toda la potencia por encima de eso se tira a la basura,
+       que es tanto como decir que las puertas no sirven para nada. */
+  const dmg = bulletDamage();
+  const hitX = (a, b2, w) => Math.abs(a - b2) < w / 2;
+  for (let i = S.bullets.length - 1; i >= 0; i--) {
+    const b = S.bullets[i];
+    const z0 = b.z;
+    b.z += CFG.fire.bulletSpeed * dt;
+    if (b.z > CFG.road.far) { S.bullets.splice(i, 1); continue; }
+
+    // el barril más cercano dentro del barrido corta el disparo
+    let block = null;
+    for (const o of S.barrels) {
+      if (o.dead) continue;
+      if (o.z >= z0 - CFG.barrel.depth && o.z <= b.z + CFG.barrel.depth &&
+          hitX(o.x, b.x, CFG.barrel.w) && (!block || o.z < block.z)) block = o;
+    }
+
+    const targets = [];
+    for (const o of S.enemies) {
+      if (o.dead) continue;
+      if (o.z >= z0 - CFG.enemy.depth && o.z <= b.z + CFG.enemy.depth &&
+          hitX(o.x, b.x, CFG.enemy.w) && (!block || o.z < block.z)) targets.push(o);
+    }
+    targets.sort((p1, p2) => p1.z - p2.z);
+
+    let left = dmg;
+    for (const o of targets) {
+      const applied = Math.min(left, o.hp);
+      o.hp -= applied; left -= applied;
+      if (o.hp <= 0) killEnemy(o);
+      if (left <= 0) break;
+    }
+    if (left > 0 && block) { block.hp -= left; left = 0; if (block.hp <= 0) blowBarrel(block); }
+    if (left <= 0) S.bullets.splice(i, 1);
+  }
+
+  if (S.enemies.some(e => e.dead)) S.enemies = S.enemies.filter(e => !e.dead);
+  if (S.barrels.some(b => b.dead)) S.barrels = S.barrels.filter(b => !b.dead);
+
+  /* partículas y efectos */
+  for (let i = S.parts.length - 1; i >= 0; i--) {
+    const p = S.parts[i];
+    p.t += dt;
+    if (p.t >= p.life) { S.parts.splice(i, 1); continue; }
+    p.x += p.vx * dt; p.y += p.vy * dt; p.vy += 300 * dt;
+  }
+  if (S.flash > 0) S.flash -= dt;
+  if (S.shake > 0) S.shake -= dt;
+}
+
+/* ============================================================
+   6. Render
+   ============================================================ */
+function draw() {
+  ctx.setTransform(scaleX, 0, 0, scaleY, 0, 0);
+  if (S.shake > 0) {
+    const m = CFG.fx.shakeMag * (S.shake / CFG.fx.shakeTime);
+    ctx.translate(rnd(-m, m), rnd(-m, m));
+  }
+  drawRoad();
+  drawPosts();
+
+  // Pintor: de lejos a cerca, para que lo cercano tape lo lejano
+  const items = [];
+  for (const g of S.gates)   items.push({ z: g.z, o: g, t: 0 });
+  for (const b of S.barrels) items.push({ z: b.z, o: b, t: 1 });
+  for (const e of S.enemies) items.push({ z: e.z, o: e, t: 2 });
+  for (const k of S.pickups) items.push({ z: k.z, o: k, t: 3 });
+  items.sort((a, b) => b.z - a.z);
+  for (const it of items) {
+    if (it.z < CFG.road.back) continue;
+    if (it.t === 0) drawGate(it.o);
+    else if (it.t === 1) drawBarrel(it.o);
+    else if (it.t === 2) drawEnemy(it.o);
+    else drawPickup(it.o);
+  }
+
+  drawBeam();
+  drawPlayer();
+
+  for (const p of S.parts) {
+    ctx.globalAlpha = 1 - p.t / p.life;
+    ctx.fillStyle = p.color;
+    ctx.fillRect(p.x - 1.5, p.y - 1.5, 3, 3);
+  }
+  ctx.globalAlpha = 1;
+
+  if (S.flash > 0 && S.flashColor) {
+    ctx.fillStyle = S.flashColor + (0.28 * (S.flash / CFG.fx.flash)).toFixed(3) + ')';
+    ctx.fillRect(-20, -20, W + 40, H + 40);
+  }
+}
+
+/* Trapecio entre dos profundidades, dado un rango lateral en unidades de mundo.
+   dy1/dy2 elevan el plano (para aceras y bordillos). */
+function quadZ(z1, z2, xa, xb, color, dy) {
+  const p1 = persp(z1), p2 = persp(z2);
+  const y1 = projY(p1) - (dy || 0) * p1, y2 = projY(p2) - (dy || 0) * p2;
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  ctx.moveTo(projX(xa, p1), y1); ctx.lineTo(projX(xb, p1), y1);
+  ctx.lineTo(projX(xb, p2), y2); ctx.lineTo(projX(xa, p2), y2);
+  ctx.closePath(); ctx.fill();
+}
+
+function drawRoad() {
+  const R = CFG.road;
+
+  // Bruma de fondo: lo que asome por encima de la calzada
+  ctx.fillStyle = 'rgb(' + FOG.r + ',' + FOG.g + ',' + FOG.b + ')';
+  ctx.fillRect(-20, -20, W + 40, H + 40);
+
+  // Tramo lejano de una pieza: ya está tan velado que no necesita detalle
+  const zc = R.segCount * R.segLen;
+  quadZ(zc, R.drawFar, -R.half - R.walk, R.half + R.walk, fogged('#c2b294', persp(R.drawFar)), R.kerbH);
+  quadZ(zc, R.drawFar, -R.half, R.half, fogged('#74777c', persp(R.drawFar)), 0);
+
+  const seg = R.segLen;
+  const off = S.dist % seg;
+  const base = Math.floor(S.dist / seg);
+
+  for (let i = R.segCount; i >= 0; i--) {
+    let z1 = i * seg - off, z2 = z1 + seg;
+    if (z2 < R.back) continue;
+    if (z1 < R.back) z1 = R.back;
+
+    const p1 = persp(z1), p2 = persp(z2);
+    const y1 = projY(p1), y2 = projY(p2);
+    const dark = ((i + base) % 2) === 0;
+    const pm = (p1 + p2) / 2;
+
+    // acera elevada y bordillo, a ambos lados
+    quadZ(z1, z2, -R.half - R.walk, -R.half, fogged(dark ? '#c2b294' : '#cbbb9d', pm), R.kerbH);
+    quadZ(z1, z2,  R.half,  R.half + R.walk, fogged(dark ? '#c2b294' : '#cbbb9d', pm), R.kerbH);
+    for (const s of [-1, 1]) {
+      const x = s * R.half;
+      const k1 = R.kerbH * p1, k2 = R.kerbH * p2;
+      ctx.fillStyle = fogged('#a3927a', pm);
+      ctx.beginPath();
+      ctx.moveTo(projX(x, p1), y1); ctx.lineTo(projX(x, p1), y1 - k1);
+      ctx.lineTo(projX(x, p2), y2 - k2); ctx.lineTo(projX(x, p2), y2);
+      ctx.closePath(); ctx.fill();
+    }
+
+    // murete exterior
+    for (const s of [-1, 1]) {
+      const x = s * (R.half + R.walk);
+      const w1 = (R.kerbH + R.wallH) * p1, w2 = (R.kerbH + R.wallH) * p2;
+      ctx.fillStyle = fogged(dark ? '#b0a288' : '#bcae94', pm);
+      ctx.beginPath();
+      ctx.moveTo(projX(x, p1), y1); ctx.lineTo(projX(x, p1), y1 - w1);
+      ctx.lineTo(projX(x, p2), y2 - w2); ctx.lineTo(projX(x, p2), y2);
+      ctx.closePath(); ctx.fill();
+    }
+
+    // asfalto
+    quadZ(z1, z2, -R.half, R.half, fogged(dark ? '#74777c' : '#7b7f84', pm), 0);
+
+    // franja blanca continua junto al bordillo
+    quadZ(z1, z2, -R.half + 7, -R.half + 12, fogged('#efece4', pm), 0);
+    quadZ(z1, z2,  R.half - 12, R.half - 7,  fogged('#efece4', pm), 0);
+
+    // raya discontinua central
+    if (dark) quadZ(z1, z1 + seg * R.dashLen, -3, 3, fogged('#efece4', pm), 0);
+  }
+}
+
+/* Farolas sobre la acera: sin algo que pase de largo, la carretera no transmite velocidad */
+function drawPosts() {
+  const R = CFG.road;
+  const off = S.dist % R.postGap;
+  for (let i = R.postCount; i >= 1; i--) {
+    const z = i * R.postGap - off;
+    if (z < 6) continue;
+    const p = persp(z), y = projY(p) - R.kerbH * p;
+    const hp = R.postH * p;
+    if (hp < 3) continue;
+    for (const s of [-1, 1]) {
+      const x = projX(s * (R.half + R.walk * 0.45), p);
+      ctx.fillStyle = fogged('#6b6152', p);
+      ctx.fillRect(x - 1.6 * p, y - hp, Math.max(1, 3.2 * p), hp);
+      ctx.fillStyle = fogged('#7d7364', p);
+      ctx.fillRect(x - (s < 0 ? 0 : 16 * p), y - hp, 16 * p, Math.max(1, 2.6 * p));
+      ctx.fillStyle = 'rgba(255,236,190,' + (0.35 + 0.5 * p).toFixed(2) + ')';
+      ctx.beginPath();
+      ctx.arc(x - s * 14 * p, y - hp + 3 * p, Math.max(0.8, 3.2 * p), 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+}
+
+function drawGate(g) {
+  const p = persp(g.z), y = projY(p), h = CFG.road.half * p, gh = CFG.gate.h * p;
+  const fs = Math.max(8, 30 * p);
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.font = '700 ' + fs.toFixed(1) + 'px Bahnschrift, "Arial Narrow", sans-serif';
+  for (let s = 0; s < 2; s++) {
+    const d = s === 0 ? g.left : g.right;
+    const x0 = s === 0 ? W / 2 - h : W / 2;
+    const c = d.good ? '74,222,128' : '255,138,60';
+    ctx.fillStyle = 'rgba(' + c + ',.20)';
+    ctx.fillRect(x0, y - gh, h, gh);
+    ctx.strokeStyle = 'rgba(' + c + ',.9)';
+    ctx.lineWidth = Math.max(1, 2 * p);
+    ctx.strokeRect(x0, y - gh, h, gh);
+    ctx.fillStyle = 'rgb(' + c + ')';
+    ctx.shadowColor = 'rgb(' + c + ')'; ctx.shadowBlur = 10 * p;
+    ctx.fillText(d.op + d.val, x0 + h / 2, y - gh / 2);
+    ctx.shadowBlur = 0;
+  }
+}
+
+/* Paletas de los personajes. El contorno oscuro no es decoración: sin él una
+   figura plana se pierde contra el asfalto. */
+const PAL = {
+  enemy:  { coat:'#e8564d', pants:'#7d2b26', skin:'#f6cba4', helmet:'#b8332c', dark:'#3d1310' },
+  player: { coat:'#4a90d9', pants:'#2a5a8a', skin:'#f6cba4', helmet:'#1f6f9e', dark:'#10263a' }
+};
+
+function rr(x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y,     x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x,     y + h, r);
+  ctx.arcTo(x,     y + h, x,     y,     r);
+  ctx.arcTo(x,     y,     x + w, y,     r);
+  ctx.closePath();
+}
+
+/* Figura estilo chibi: cabeza grande, cuerpo pequeño y contorno.
+   Todo se escala con p, así que la misma función sirve de cerca y en la lejanía. */
+function figure(sx, y, p, c, rifle) {
+  const h = 54 * p;
+  if (h < 2.5) return;                       // demasiado lejos para dibujar detalle
+  const lw = Math.max(0.6, 1.7 * p);
+  const headR = h * 0.195, bw = h * 0.34, bh = h * 0.32, legH = h * 0.15;
+  const bodyB = y - legH, bodyT = bodyB - bh;
+  const headCy = bodyT - headR * 0.72;
+
+  ctx.fillStyle = 'rgba(0,0,0,.32)';
+  ctx.beginPath(); ctx.ellipse(sx, y, h * 0.22, h * 0.065, 0, 0, Math.PI * 2); ctx.fill();
+
+  ctx.lineWidth = lw; ctx.strokeStyle = c.dark; ctx.lineJoin = 'round';
+
+  ctx.fillStyle = c.pants;
+  rr(sx - bw * 0.42, bodyB - lw, bw * 0.34, legH + lw, lw); ctx.fill(); ctx.stroke();
+  rr(sx + bw * 0.08, bodyB - lw, bw * 0.34, legH + lw, lw); ctx.fill(); ctx.stroke();
+
+  ctx.fillStyle = c.coat;
+  rr(sx - bw / 2 - bw * 0.2, bodyT + bh * 0.16, bw * 0.26, bh * 0.62, bw * 0.13);
+  ctx.fill(); ctx.stroke();
+  rr(sx + bw / 2 - bw * 0.06, bodyT + bh * 0.16, bw * 0.26, bh * 0.62, bw * 0.13);
+  ctx.fill(); ctx.stroke();
+  rr(sx - bw / 2, bodyT, bw, bh, bw * 0.28); ctx.fill(); ctx.stroke();
+
+  if (rifle) {                               // el fusil apuntando carretera arriba
+    ctx.fillStyle = c.dark;
+    rr(sx + bw * 0.34, bodyT - bh * 0.5, bw * 0.16, bh * 1.0, bw * 0.07);
+    ctx.fill();
+  }
+
+  ctx.fillStyle = c.skin;
+  ctx.beginPath(); ctx.arc(sx, headCy, headR, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+
+  ctx.fillStyle = c.helmet;
+  ctx.beginPath();
+  ctx.arc(sx, headCy, headR * 1.05, Math.PI, Math.PI * 2); ctx.closePath();
+  ctx.fill(); ctx.stroke();
+  ctx.beginPath();
+  ctx.ellipse(sx, headCy - headR * 0.06, headR * 1.22, headR * 0.22, 0, 0, Math.PI * 2);
+  ctx.fill(); ctx.stroke();
+
+  if (p > 0.4) {                             // la cara solo se pinta cuando se vería
+    ctx.fillStyle = c.dark;
+    const er = Math.max(0.6, headR * 0.14);
+    ctx.beginPath();
+    ctx.arc(sx - headR * 0.34, headCy + headR * 0.3, er, 0, Math.PI * 2);
+    ctx.arc(sx + headR * 0.34, headCy + headR * 0.3, er, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+function drawEnemy(e) {
+  const p = persp(e.z), y = projY(p), sx = projX(e.x, p);
+  figure(sx, y, p, PAL.enemy, false);
+  if (e.hp < e.maxHp) {                    // barra de vida solo si ya recibió daño
+    const w = 22 * p;
+    ctx.fillStyle = 'rgba(0,0,0,.5)';
+    ctx.fillRect(sx - w / 2, y - 58 * p, w, 3 * p + 0.6);
+    ctx.fillStyle = '#ff4d4d';
+    ctx.fillRect(sx - w / 2, y - 58 * p, w * (e.hp / e.maxHp), 3 * p + 0.6);
+  }
+}
+
+function drawBarrel(b) {
+  const p = persp(b.z), y = projY(p), sx = projX(b.x, p);
+  const w = CFG.barrel.w * p, h = 76 * p;
+  if (h < 3) return;
+  const cy = y - h / 2, rx = w * 0.44, ry = w * 0.19, bulge = rx * 1.24;
+
+  ctx.fillStyle = 'rgba(0,0,0,.28)';
+  ctx.beginPath(); ctx.ellipse(sx, y, bulge * 0.95, ry * 0.62, 0, 0, Math.PI * 2); ctx.fill();
+
+  /* Cilindro: los laterales se abomban y el degradado hace de volumen.
+     Un relleno plano con un rectángulo de sombra leía como caja. */
+  const g = ctx.createLinearGradient(sx - bulge, 0, sx + bulge, 0);
+  g.addColorStop(0,    fogged('#8f5c28', p));
+  g.addColorStop(0.32, fogged('#c98f47', p));
+  g.addColorStop(0.62, fogged('#b07a3c', p));
+  g.addColorStop(1,    fogged('#7a4d20', p));
+  ctx.fillStyle = g;
+  ctx.beginPath();
+  ctx.moveTo(sx - rx, y - h + ry);
+  ctx.bezierCurveTo(sx - bulge, cy - h * 0.18, sx - bulge, cy + h * 0.18, sx - rx, y - ry);
+  ctx.ellipse(sx, y - ry, rx, ry, 0, Math.PI, 0, true);
+  ctx.bezierCurveTo(sx + bulge, cy + h * 0.18, sx + bulge, cy - h * 0.18, sx + rx, y - h + ry);
+  ctx.closePath(); ctx.fill();
+
+  // aros metálicos, curvados con la panza
+  ctx.strokeStyle = fogged('#6b4119', p);
+  ctx.lineWidth = Math.max(1, 3.2 * p);
+  for (const f of [0.3, 0.7]) {
+    const yy = y - h + h * f;
+    const rr2 = rx + (bulge - rx) * (1 - Math.abs(f - 0.5) * 2) * 0.95;
+    ctx.beginPath(); ctx.ellipse(sx, yy, rr2, ry * 0.52, 0, 0, Math.PI * 2); ctx.stroke();
+  }
+
+  // tapa
+  ctx.fillStyle = fogged('#d8a457', p);
+  ctx.beginPath(); ctx.ellipse(sx, y - h + ry, rx, ry, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.strokeStyle = fogged('#8f5c28', p); ctx.lineWidth = Math.max(0.8, 1.6 * p);
+  ctx.beginPath(); ctx.ellipse(sx, y - h + ry, rx, ry, 0, 0, Math.PI * 2); ctx.stroke();
+
+  if (p > 0.28) {                         // carita, como en la referencia
+    const er = Math.max(0.8, rx * 0.13);
+    ctx.fillStyle = '#f6efe2';
+    ctx.beginPath();
+    ctx.arc(sx - rx * 0.33, cy - ry * 0.4, er * 2.1, 0, Math.PI * 2);
+    ctx.arc(sx + rx * 0.33, cy - ry * 0.4, er * 2.1, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#2e2117';
+    ctx.beginPath();
+    ctx.arc(sx - rx * 0.33, cy - ry * 0.4, er, 0, Math.PI * 2);
+    ctx.arc(sx + rx * 0.33, cy - ry * 0.4, er, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = '#2e2117'; ctx.lineWidth = Math.max(0.8, rx * 0.09);
+    ctx.beginPath();
+    ctx.arc(sx, cy + ry * 0.35, rx * 0.3, 0.15 * Math.PI, 0.85 * Math.PI);
+    ctx.stroke();
+  }
+
+  const fs = Math.max(8, 24 * p);
+  ctx.font = '800 ' + fs.toFixed(1) + 'px Bahnschrift, "Arial Narrow", sans-serif';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.lineWidth = Math.max(1, 3 * p); ctx.strokeStyle = '#2e2117';
+  ctx.strokeText(b.hp, sx, y - h - 9 * p);
+  ctx.fillStyle = '#fff8ec';
+  ctx.fillText(b.hp, sx, y - h - 9 * p);
+}
+
+/* Una sola moto para el recogible y para la montada: si se dibujaran distinto
+   parecerían dos objetos que no tienen nada que ver. */
+function drawBike(sx, y, p, bright) {
+  const w = CFG.pickup.w * p, r = 10 * p;
+  if (r < 1.2) return;
+  ctx.strokeStyle = bright ? '#a8ecff' : '#6ad4ff';
+  ctx.lineWidth = Math.max(1, 2.6 * p);
+  ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+  ctx.shadowColor = '#6ad4ff'; ctx.shadowBlur = (bright ? 18 : 12) * p;
+  ctx.beginPath();
+  ctx.arc(sx - w * 0.34, y - r, r, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.arc(sx + w * 0.34, y - r, r, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(sx - w * 0.34, y - r);
+  ctx.lineTo(sx - w * 0.02, y - r * 2.2);
+  ctx.lineTo(sx + w * 0.34, y - r);
+  ctx.moveTo(sx - w * 0.02, y - r * 2.2);
+  ctx.lineTo(sx + w * 0.26, y - r * 2.9);
+  ctx.stroke();
+  ctx.shadowBlur = 0; ctx.lineCap = 'butt';
+}
+
+function drawPickup(k) {
+  const p = persp(k.z);
+  drawBike(projX(k.x, p), projY(p), p, false);
+}
+
+/* Haz continuo, como en la referencia: los proyectiles sueltos se leían como
+   guiones desconectados del personaje. */
+function drawBeam() {
+  if (!S.bullets.length) return;
+  let far = 0;
+  for (const b of S.bullets) if (b.z > far) far = b.z;
+  const p0 = persp(0), pf = persp(far);
+  const y0 = projY(p0) - 30, yf = projY(pf) - 26 * pf;
+  const x0 = projX(S.x, p0), xf = projX(S.x, pf);
+  const w0 = 7, wf = Math.max(0.8, 7 * pf);
+
+  const g = ctx.createLinearGradient(0, y0, 0, yf);
+  g.addColorStop(0, 'rgba(180,240,255,.85)');
+  g.addColorStop(0.55, 'rgba(120,215,255,.35)');
+  g.addColorStop(1, 'rgba(120,215,255,0)');
+  ctx.fillStyle = g;
+  ctx.beginPath();
+  ctx.moveTo(x0 - w0, y0); ctx.lineTo(x0 + w0, y0);
+  ctx.lineTo(xf + wf, yf); ctx.lineTo(xf - wf, yf);
+  ctx.closePath(); ctx.fill();
+
+  ctx.shadowColor = '#9fe8ff'; ctx.shadowBlur = 14;
+  ctx.fillStyle = 'rgba(240,253,255,.95)';
+  for (const b of S.bullets) {
+    const p = persp(b.z);
+    const r = Math.max(0.7, 3.2 * p);
+    ctx.beginPath();
+    ctx.arc(projX(b.x, p), projY(p) - 26 * p, r, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  // fogonazo en la boca del arma
+  ctx.fillStyle = 'rgba(255,255,255,.9)';
+  ctx.beginPath(); ctx.arc(x0, y0, 5, 0, Math.PI * 2); ctx.fill();
+  ctx.shadowBlur = 0;
+}
+
+function drawPlayer() {
+  const y = projY(1), sx = projX(S.x, 1);
+  if (S.ram > 0) {
+    drawBike(sx, y, 1, true);
+    figure(sx - 3, y - 21, 0.9, PAL.player, false);   // el piloto, sentado sobre la moto
+  } else {
+    figure(sx, y, 1, PAL.player, true);
+  }
+}
+
+/* ============================================================
+   7. Controles
+   ============================================================ */
+let dragId = null, dragX = 0;
+
+cv.addEventListener('pointerdown', e => {
+  if (S.mode !== 'play') return;
+  dragId = e.pointerId; dragX = e.clientX;
+  cv.setPointerCapture(dragId);
+});
+cv.addEventListener('pointermove', e => {
+  if (dragId !== e.pointerId || S.mode !== 'play') return;
+  const r = cv.getBoundingClientRect();
+  S.targetX += (e.clientX - dragX) * (W / r.width);
+  dragX = e.clientX;
+});
+function endDrag(e) {
+  if (dragId === e.pointerId) { cv.releasePointerCapture(dragId); dragId = null; }
+}
+cv.addEventListener('pointerup', endDrag);
+cv.addEventListener('pointercancel', endDrag);
+
+window.addEventListener('keydown', e => {
+  if (e.key === 'ArrowLeft')  { S.keyDir = -1; e.preventDefault(); }
+  if (e.key === 'ArrowRight') { S.keyDir =  1; e.preventDefault(); }
+  if ((e.key === 'Enter' || e.key === ' ') && S.mode !== 'play') startGame();
+});
+window.addEventListener('keyup', e => {
+  if ((e.key === 'ArrowLeft' && S.keyDir === -1) || (e.key === 'ArrowRight' && S.keyDir === 1)) S.keyDir = 0;
+});
+
+function startGame() {
+  reset();
+  el.start.hidden = true;
+  el.end.hidden   = true;
+  S.mode = 'play';
+}
+
+function gameOver() {
+  S.mode = 'over';
+  syncHud();
+  if (S.score > S.best) { S.best = S.score; saveBest(S.best); }
+  el.final.textContent = S.score;
+  el.best.textContent  = S.best;
+  el.end.hidden = false;
+}
+
+document.getElementById('btnStart').addEventListener('click', startGame);
+document.getElementById('btnRetry').addEventListener('click', startGame);
+
+/* ============================================================
+   8. Bucle principal (delta time)
+   ============================================================ */
+let last = performance.now();
+function loop(now) {
+  const dt = Math.min((now - last) / 1000, 0.05);
+  last = now;
+  if (S.mode === 'play') update(dt);
+  draw();
+  requestAnimationFrame(loop);
+}
+
+S.best = loadBest();
+resize();
+reset();
+requestAnimationFrame(loop);
+})();
+</script>
+<script>
+  /* Registro del service worker: sin el, Chrome no ofrece instalar en Android.
+     Falla a proposito en file://, asi que se comprueba antes. */
+  if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('../../sw.js').catch(() => {});
+    });
+  }
+</script>
+</body>
+</html>
