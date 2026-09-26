@@ -331,9 +331,12 @@ const mbar=document.querySelector('#mbar b');
 // ---------- Menú principal ----------
 let inMenu=true; document.body.classList.add('menu');
 // En móvil: pantalla completa + bloqueo en horizontal (Android; en iOS queda el aviso de girar)
-function landscape(){ const d=document.documentElement;
-  if(!matchMedia('(pointer:coarse)').matches || document.fullscreenElement || !d.requestFullscreen) return;
-  d.requestFullscreen({navigationUI:'hide'}).then(()=>screen.orientation?.lock?.('landscape')).catch(()=>{}); }
+function landscape(){ const d=document.documentElement, lock=()=>screen.orientation?.lock?.('landscape');
+  if(!matchMedia('(pointer:coarse)').matches) return;
+  // App instalada: se puede bloquear directamente; en el navegador hace falta pantalla completa antes
+  Promise.resolve().then(lock).catch(()=>{
+    if(!document.fullscreenElement && d.requestFullscreen) return d.requestFullscreen({navigationUI:'hide'}).then(lock);
+  }).catch(()=>{}); }
 function startGame(m){ landscape();mode=m; resetRace(); inMenu=false; document.body.classList.remove('menu');
   toast={txt:m==='entreno'?'ENTRENAMIENTO':'A POR LA ETAPA',t:120}; }
 function openMenu(){ inMenu=true; podium=false; boost=false; mode='carrera'; resetRace(); document.body.classList.add('menu'); }
