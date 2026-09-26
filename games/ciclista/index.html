@@ -1,0 +1,598 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pixel Ciclismo</title>
+<link rel="manifest" href="../../manifest.webmanifest">
+<link rel="apple-touch-icon" href="../../icon.svg">
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { background:#0b0d17; height:100vh; display:grid; place-items:center; overflow:hidden; }
+  canvas { width:min(100vw, 177.7vh); image-rendering:pixelated; display:block; cursor:pointer; }
+  #boost { position:fixed; right:132px; bottom:30px; width:78px; height:78px; border-radius:50%; padding:0; cursor:pointer; border:4px solid #1a1c2c;
+    background:radial-gradient(circle at 35% 30%,#fff3b0,#ffcd75 45%,#ef7d57); box-shadow:0 6px 0 #1a1c2c, 0 0 18px #ffcd7588; touch-action:none; user-select:none; }
+  #boost span { display:grid; place-items:center; font:bold 11px monospace; color:#1a1c2c; line-height:1.1; }
+  #boost i { font-style:normal; font-size:10px; letter-spacing:-1px; }
+  #boost:active, #boost.on { transform:translateY(4px); box-shadow:0 2px 0 #1a1c2c, 0 0 30px #ffcd75; }
+  #boost.on { animation:glow .2s steps(2) infinite; }
+  @keyframes glow { 50% { background:#fff3b0; } }
+  #boost.empty, #orders button.empty { filter:grayscale(1) brightness(.6); pointer-events:none; }
+  #orders button.avit { background:#8b5a2b; }
+  #orders button.avit.full { filter:grayscale(.8) brightness(.7); }
+  #orders button.avit.used { filter:grayscale(1) brightness(.6); pointer-events:none; }
+  #sprint { position:fixed; right:24px; bottom:24px; width:96px; height:96px; border-radius:50%; border:0; padding:6px; cursor:pointer;
+    background:conic-gradient(var(--c,#38b764) calc(var(--e,100)*1%), #333c57 0); box-shadow:0 6px 0 #1a1c2c, 0 10px 24px #0008;
+    touch-action:none; user-select:none; -webkit-user-select:none; transition:transform .08s, box-shadow .08s; }
+  #sprint span { display:grid; place-items:center; width:100%; height:100%; border-radius:50%; background:#e43b44; color:#fff;
+    font:bold 13px monospace; letter-spacing:1px; text-shadow:2px 2px 0 #1a1c2c; border:3px solid #1a1c2c; image-rendering:pixelated; }
+  #sprint.on { transform:translateY(5px); box-shadow:0 1px 0 #1a1c2c, 0 4px 12px #0008; }
+  #sprint.on span { background:#ffcd75; color:#1a1c2c; text-shadow:none; }
+  #sprint.tired span { background:#5d275d; color:#b0a0c0; animation:blink .4s steps(2) infinite; }
+  @keyframes blink { 50% { background:#e43b44; } }
+  #mode { position:fixed; top:16px; right:16px; padding:8px 12px; font:bold 12px monospace; color:#1a1c2c; background:#73eff7;
+    border:3px solid #1a1c2c; border-radius:8px; box-shadow:0 4px 0 #1a1c2c; cursor:pointer; }
+  #mode:active { transform:translateY(3px); box-shadow:0 1px 0 #1a1c2c; }
+  #menu { position:fixed; inset:0; display:none; flex-direction:column; align-items:center; justify-content:center; gap:14px; padding:16px;
+    background:radial-gradient(ellipse at center,#1a1c2c99,#0b0d17ee); font-family:monospace; color:#f4f4f4; text-align:center; z-index:5; }
+  body.menu #menu { display:flex; }
+  body.menu #orders, body.menu #sprint, body.menu #boost, body.menu #mode, body.paused #mode { display:none; }
+  #pause { position:fixed; inset:0; display:none; flex-direction:column; align-items:center; justify-content:center; gap:12px; background:#0b0d17cc; z-index:6; font-family:monospace; }
+  body.paused #pause { display:flex; }
+  #pause h2 { font-size:40px; letter-spacing:6px; color:#f4f4f4; text-shadow:4px 4px 0 #3b5dc9; margin-bottom:8px; animation:bob 1.4s ease-in-out infinite; }
+  #pause button { width:min(280px,90vw); padding:12px; font:bold 18px monospace; letter-spacing:2px; color:#1a1c2c; background:#73eff7; border:4px solid #1a1c2c; border-radius:10px; box-shadow:0 6px 0 #1a1c2c; cursor:pointer; }
+  #pause button:first-of-type { background:#38b764; color:#fff; }
+  #pause button:last-of-type { background:#e43b44; color:#fff; }
+  #pause button:active { transform:translateY(4px); box-shadow:0 2px 0 #1a1c2c; }
+  #mode { font-size:14px !important; padding:10px 14px !important; }
+  #menu h1 { font-size:clamp(34px,8vw,64px); line-height:.95; letter-spacing:4px; color:#ffcd75; margin-bottom:12px;
+    text-shadow:4px 4px 0 #e43b44, 8px 8px 0 #1a1c2c; animation:bob 2s ease-in-out infinite; }
+  #menu h1 span { color:#73eff7; text-shadow:4px 4px 0 #3b5dc9, 8px 8px 0 #1a1c2c; }
+  @keyframes bob { 50% { transform:translateY(-6px); } }
+  #menu button { width:min(340px,100%); display:grid; grid-template-columns:44px 1fr; align-items:center; text-align:left; gap:0 10px;
+    padding:12px 16px; font:bold 20px monospace; letter-spacing:2px; color:#1a1c2c; background:#ffcd75; border:4px solid #1a1c2c;
+    border-radius:10px; box-shadow:0 6px 0 #1a1c2c; cursor:pointer; transition:transform .08s, box-shadow .08s, background .15s; }
+  #menu button + button { background:#73eff7; }
+  #menu button em { grid-row:span 2; font-style:normal; font-size:30px; }
+  #menu button small { font-size:11px; letter-spacing:0; opacity:.75; }
+  #menu button:hover { transform:translateY(-2px); box-shadow:0 8px 0 #1a1c2c; }
+  #menu button:active { transform:translateY(4px); box-shadow:0 2px 0 #1a1c2c; }
+  #menu .back { font:bold 13px monospace; color:#94b0c2; text-decoration:none; padding:6px 10px; border:2px solid #333c57; border-radius:8px; }
+  #menu .back:hover { color:#f4f4f4; border-color:#94b0c2; }
+  #menu p { margin-top:10px; font-size:12px; color:#94b0c2; } #menu p b { color:#f4f4f4; }
+  #orders { position:fixed; left:16px; bottom:16px; display:grid; grid-template-columns:repeat(3,auto); gap:6px; padding:8px;
+    background:#1a1c2ccc; border:3px solid #333c57; border-radius:10px; font:bold 11px monospace; color:#f4f4f4; }
+  #orders .head { grid-column:1/-1; display:flex; align-items:center; gap:8px; color:#ffcd75; letter-spacing:1px; }
+  #orders .head i { flex:1; height:6px; background:#333c57; border:1px solid #0d0e16; }
+  #orders .head b { display:block; height:100%; width:100%; background:#38b764; transition:width .2s; }
+  #orders button { position:relative; display:flex; flex-direction:column; align-items:center; gap:2px; min-width:62px; padding:6px 4px 5px;
+    font:inherit; color:#f4f4f4; background:#333c57; border:0; border-radius:6px; box-shadow:0 4px 0 #0d0e16; cursor:pointer;
+    touch-action:manipulation; transition:transform .08s, box-shadow .08s, background .15s; }
+  #orders button em { font-style:normal; font-size:18px; }
+  #orders button small { position:absolute; top:2px; right:4px; opacity:.5; font-size:9px; }
+  #orders button:hover { background:#41507a; }
+  #orders button:active { transform:translateY(3px); box-shadow:0 1px 0 #0d0e16; }
+  #orders button.on { background:#ffcd75; color:#1a1c2c; box-shadow:0 4px 0 #ef7d57; }
+  @media (max-width:560px){ #orders button{min-width:48px;font-size:9px} #orders button em{font-size:15px} #sprint{width:80px;height:80px} }
+</style>
+</head>
+<body>
+<canvas id="c" width="480" height="270"></canvas>
+<button id="sprint" aria-label="Esprintar"><span>⚡<br>SPRINT</span></button>
+<button id="boost" aria-label="Boost (B)"><span>🚀<br>BOOST<br><i id="bcount">⚡⚡⚡</i></span></button>
+<button id="mode" title="Pausa (Esc / P)">⏸ PAUSA</button>
+<div id="pause">
+  <h2>PAUSA</h2>
+  <button data-p="seguir">▶ CONTINUAR</button>
+  <button data-p="reiniciar">🔄 REINICIAR</button>
+  <button data-p="salir">🚪 SALIR AL MENÚ</button>
+</div>
+<div id="menu">
+  <h1>PIXEL<br><span>CICLISMO</span></h1>
+  <button data-m="carrera"><em>🏁</em>CARRERA<small>6 corredores · 3 equipos · final en alto</small></button>
+  <button data-m="entreno"><em>🚴</em>ENTRENAMIENTO<small>tú y tu compi · recorrido infinito</small></button>
+  <a class="back" href="../../index.html">&larr; Volver al arcade</a>
+  <p><b>ESPACIO / →</b> esprint · <b>B</b> boost · <b>1-3</b> órdenes al compi · <b>M</b> menú</p>
+</div>
+<div id="orders">
+  <div class="head">ÓRDENES AL COMPI <i id="mbar"><b></b></i></div>
+  <button data-o="relevos"><em>🔄</em>RELEVOS<small>1</small></button>
+  <button data-o="esperar" class="on"><em>🛡️</em>CONMIGO<small>2</small></button>
+  <button data-o="avit" class="avit"><em>🍌</em>AVITUALLAR<small>3</small></button>
+</div>
+<script>
+const cv=document.getElementById('c'), g=cv.getContext('2d');
+const W=480, H=270, CAM=190; // más resolución: más mundo visible con píxeles más finos
+
+// ---------- Utilidades de píxel ----------
+function px(x,y,c){ g.fillStyle=c; g.fillRect(Math.round(x),Math.round(y),1,1); }
+function line(x0,y0,x1,y1,c){ x0=Math.round(x0);y0=Math.round(y0);x1=Math.round(x1);y1=Math.round(y1);
+  const dx=Math.abs(x1-x0), dy=-Math.abs(y1-y0), sx=x0<x1?1:-1, sy=y0<y1?1:-1; let e=dx+dy; g.fillStyle=c;
+  for(;;){ g.fillRect(x0,y0,1,1); if(x0===x1&&y0===y1) break; const e2=2*e; if(e2>=dy){e+=dy;x0+=sx;} if(e2<=dx){e+=dx;y0+=sy;} } }
+function thick(x0,y0,x1,y1,c){ line(x0,y0,x1,y1,c); line(x0+1,y0,x1+1,y1,c); }
+function circle(cx,cy,r,c){ cx=Math.round(cx);cy=Math.round(cy); let x=r,y=0,e=1-r; g.fillStyle=c;
+  while(x>=y){ [[x,y],[y,x],[-y,x],[-x,y],[-x,-y],[-y,-x],[y,-x],[x,-y]].forEach(([a,b])=>g.fillRect(cx+a,cy+b,1,1)); y++; if(e<0) e+=2*y+1; else { x--; e+=2*(y-x)+1; } } }
+function disc(cx,cy,r,c){ g.fillStyle=c; for(let y=-r;y<=r;y++){ const w=Math.floor(Math.sqrt(r*r-y*y)); g.fillRect(Math.round(cx)-w,Math.round(cy)+y,w*2+1,1);} }
+
+// ---------- Terreno ----------
+// alt(x): altura real del mundo (y crece hacia abajo). Ondas largas = puertos de varios km, cortas = repechos
+const alt=x=>118 - Math.sin(x*.0011)*130 - Math.sin(x*.0027+1)*45 + Math.sin(x*.012)*4 + Math.sin(x*.031)*2;
+const altL=x=>118 - Math.sin(x*.0011)*130 - Math.sin(x*.0027+1)*45; // solo los puertos (para el perfil)
+const slope=x=>Math.atan2(alt(x+6)-alt(x-6),12);
+// terrain(x): altura en pantalla, con la cámara vertical aplicada
+let camY=alt(110)-CAM;
+const terrain=x=>alt(x)-camY;
+
+// ---------- Estado ----------
+let dist=0, speed=1.2, crank=0, t=0, boost=false, km=0, trail=[];
+const flags=[]; for(let i=1;i<50;i++) flags.push(i*700);
+addEventListener('keydown',e=>{
+  if(e.code==='Space'||e.code==='ArrowRight'){ e.preventDefault(); if(inMenu) return startGame("carrera"); if(podium){ if(t>60) openMenu(); return; } boost=true; }
+  const k={Digit1:'relevos',Digit2:'esperar',Digit3:'avit'}[e.code]; if(k&&!podium&&!inMenu) setOrder(k);
+  if(e.code==='KeyB'||e.code==='ShiftLeft'||e.code==='ShiftRight') useBoost(me); });
+addEventListener('pointerdown',e=>{ if(podium&&t>60&&!e.target.closest('#orders')){ openMenu(); } }, true);
+addEventListener('keyup',e=>{ if(e.code==='Space'||e.code==='ArrowRight') boost=false; });
+cv.addEventListener('pointerdown',()=>boost=true); addEventListener('pointerup',()=>boost=false);
+const sBtn=document.getElementById('sprint');
+sBtn.addEventListener('pointerdown',e=>{ e.preventDefault(); sBtn.setPointerCapture(e.pointerId); boost=true; });
+['pointerup','pointercancel','lostpointercapture'].forEach(ev=>sBtn.addEventListener(ev,()=>boost=false));
+sBtn.addEventListener('contextmenu',e=>e.preventDefault());
+
+const rnd=(a,b)=>a+Math.random()*(b-a);
+const clouds=Array.from({length:6},()=>({x:rnd(0,W),y:rnd(8,50),w:rnd(10,22)|0}));
+const birds=Array.from({length:3},()=>({x:rnd(0,W),y:rnd(20,50),p:rnd(0,6)}));
+const far=x=>150+Math.sin(x*.02)*10+Math.sin(x*.053)*4;
+const mid=x=>172+Math.sin(x*.03+2)*8;
+
+// ---------- Ciclista (cuerpo articulado con IK de 2 huesos) ----------
+function ik(ax,ay,bx,by,l1,l2){ const dx=bx-ax, dy=by-ay, d=Math.min(Math.hypot(dx,dy),l1+l2-.01);
+  const a=Math.atan2(dy,dx), c=Math.acos((l1*l1+d*d-l2*l2)/(2*l1*d)); return [ax+Math.cos(a-c)*l1, ay+Math.sin(a-c)*l1]; }
+
+// Posturas: sentado, de pie (escalando) y acoplado (bajando)
+const POSE={ sit:{hip:[-3,-20],sh:[4,-28],head:[7,-32]}, stand:{hip:[1,-21],sh:[8,-28],head:[11,-30]}, tuck:{hip:[-4,-19],sh:[6,-24],head:[10,-25]} };
+const mix=(a,b,k)=>[a[0]+(b[0]-a[0])*k, a[1]+(b[1]-a[1])*k];
+function poseOf(r){ const u=Math.max(0,r.climb), d=Math.max(0,-r.climb), o={};
+  for(const k of ['hip','sh','head']) o[k]=mix(mix(POSE.sit[k],POSE.stand[k],u),POSE.tuck[k],d);
+  if(u>0){ const sw=Math.sin(r.crank)*1.5*u; o.hip[0]+=sw; o.sh[0]+=sw*.6; o.head[0]+=sw*.4; o.hip[1]-=Math.abs(Math.cos(r.crank))*u; } // balanceo
+  return o; }
+
+function bike(r,bx,ang,oy){
+  // ⚡ boost: dos siluetas fantasma que se quedan atrás, estelas largas y chispas en las ruedas
+  if(r.boostT>0 && !r.ghost){ const G=Object.assign(Object.create(r),{ghost:1,name:''});
+    // salen del corredor al activarse, se quedan detrás y vuelven a él al terminar
+    const p=1-r.boostT/BOOST_F, ease=k=>1-Math.pow(1-k,3);
+    const f= p<.18 ? ease(p/.18) : p>.8 ? ease((1-p)/.2) : 1;
+    [[-28,.16],[-14,.32]].forEach(([dx,a])=>{ const d=dx*f; G.w=r.w+d; g.globalAlpha=a*Math.min(1,f*1.5); bike(G,bx+d,slope(G.w),oy); }); g.globalAlpha=1;
+    const ty0=oy ?? terrain(r.w);
+    if(t%2===0) trail.push({x:bx-18,y:ty0-rnd(6,40)|0,vx:-4,vy:0,l:12,len:rnd(8,20)|0,c:Math.random()<.5?'#ffcd75':'#fff3b0'});
+    if(t%3===0) trail.push({x:bx-16,y:ty0-1,vx:rnd(-2.5,-1),vy:rnd(-1.2,-.3),l:14,c:'#ffcd75'}); }
+  const crank=r.crank, c=r.col, ty=oy ?? terrain(r.w);
+  if(r.climb>0) ang+=Math.sin(r.crank)*.06*r.climb; // la bici se mece de lado a lado
+  const K=BK, C=Math.cos(ang), S=Math.sin(ang), P=(x,y)=>[bx+(x*C-y*S)*K, ty+(x*S+y*C)*K]; // local → mundo (escalado)
+  const R=Math.round(7*K), rear=P(-10,-7), front=P(11,-7), bb=P(0,-6), seat=P(-4,-17), bar=P(8,-18);
+  const ps=poseOf(r), hip=P(...ps.hip), sh=P(...ps.sh), head=P(...ps.head);
+  const fat=(x0,y0,x1,y1,c)=>{ thick(x0,y0,x1,y1,c); line(x0,y0+1,x1,y1+1,c); };
+  // ruedas
+  [rear,front].forEach(([x,y])=>{ circle(x,y,R,'#1a1c2c'); circle(x,y,R-1,'#1a1c2c'); circle(x,y,R-2,'#333c57');
+    for(let k=0;k<5;k++){ const a=crank*1.6+k*Math.PI/5; line(x-Math.cos(a)*(R-3),y-Math.sin(a)*(R-3),x+Math.cos(a)*(R-3),y+Math.sin(a)*(R-3),'#94b0c2'); }
+    disc(x,y,1,'#f4f4f4'); });
+  // pierna trasera (detrás del cuadro)
+  const CR=3.5*K, pA=[bb[0]+Math.cos(crank+Math.PI)*CR, bb[1]+Math.sin(crank+Math.PI)*CR];
+  const kA=ik(hip[0],hip[1],pA[0],pA[1],8*K,8*K); fat(hip[0],hip[1],kA[0],kA[1],c.legB); thick(kA[0],kA[1],pA[0],pA[1],c.legB);
+  // cuadro
+  thick(...rear,...bb,c.frame); thick(...bb,...seat,c.frame); line(...seat,...rear,c.frame);
+  thick(...bb,...P(7,-15),c.frame); thick(...seat,...P(7,-15),c.frame); thick(...P(7,-15),...front,c.frame2);
+  line(...P(7,-15),...bar,c.frame2); thick(...bar,...P(10,-17),'#1a1c2c');
+  thick(...P(-6,-17),...P(-2,-17),'#1a1c2c');
+  // bielas y plato
+  const pB=[bb[0]+Math.cos(crank)*CR, bb[1]+Math.sin(crank)*CR]; circle(bb[0],bb[1],2,'#94b0c2'); thick(...bb,...pB,'#c0cbdc');
+  // torso (maillot con franja)
+  fat(hip[0],hip[1],sh[0],sh[1],c.shirt); fat(hip[0]+1,hip[1]-1,sh[0]+1,sh[1]-1,c.shirt); fat(hip[0]-1,hip[1],sh[0]-1,sh[1]+1,c.shirt); line(...mix(hip,sh,.2),...mix(hip,sh,.9),c.stripe);
+  const kB=ik(hip[0],hip[1],pB[0],pB[1],8*K,8*K); fat(hip[0],hip[1],kB[0],kB[1],c.leg); thick(kB[0],kB[1],pB[0],pB[1],'#f2c49b');
+  g.fillStyle='#1a1c2c'; g.fillRect(Math.round(pB[0])-1,Math.round(pB[1])-1,4,2); // zapatilla
+  const el=ik(sh[0],sh[1],bar[0]+1,bar[1],5*K,5*K); thick(sh[0],sh[1],el[0],el[1],c.shirt); thick(el[0],el[1],bar[0]+1,bar[1],'#f2c49b');
+  const HR=Math.round(3*K); disc(head[0],head[1],HR,'#f2c49b');
+  // casco y gafas
+  const hc=[head[0]-S*HR-C*1, head[1]-C*HR+S*1]; disc(hc[0],hc[1],HR,c.helmet); line(hc[0]-HR,hc[1]+1,hc[0]+HR,hc[1]+2,'#1a1c2c');
+  line(head[0]+1,head[1]-(r.climb>.5?0:1),head[0]+HR,head[1]-(r.climb>.5?0:1),'#1a1c2c');
+  if(r.ghost) return; // las siluetas del boost solo dibujan el cuerpo
+  // sudor al escalar
+  if(r.climb>.6 && Math.random()<.15) trail.push({x:head[0]-2,y:head[1]-2,vx:rnd(-.6,.1),vy:rnd(-.8,-.3),l:14,c:'#73eff7'});
+  if(r.name) text(r.name,head[0]-r.name.length*2,hc[1]-12,r.me?'#ffcd75':r.mate?'#73eff7':'#f4f4f4');
+  if(r.role==='lead' && !podium) px(head[0]+r.name.length*2+2,hc[1]-10,'#ffcd75'); // estrellita de líder
+  if(r.mode && !podium){ const ic={tira:'>>',espera:'<<',alcanza:'+'}[r.mode]; text(ic,head[0]+r.name.length*2+2,hc[1]-12,r.col.shirt); }
+  if(r.mate && !podium){ const ic={atacar:'!!',tirar:'>>',esperar:'<<',libre:'?',avit:'AV',relevos:mate.rel==='tira'?'R>>':'R<<'}[mate.order]; text(ic,head[0]+r.name.length*2+2,hc[1]-12,'#73eff7'); }
+  // mini barra de energía sobre la cabeza
+  const ex=Math.round(head[0]-6), ey=Math.round(hc[1]-6);
+  g.fillStyle='#1a1c2c'; g.fillRect(ex-1,ey-1,14,3); g.fillStyle=r.tired?(t%20<10?'#e43b44':'#5d275d'):r.energy>50?'#38b764':r.energy>25?'#ffcd75':'#ef7d57';
+  g.fillRect(ex,ey,Math.round(12*r.energy/100),1);
+  // a rueda: líneas de viento que se desvían por encima
+  if(r.draft && t%3===0) trail.push({x:head[0]+20,y:head[1]-rnd(2,12),vx:-1.6,vy:-.25,l:8,c:'#ffffff'});
+  if(((r.atk>0 && !r.tired) || r.lanza) && t%4===0) trail.push({x:bx-22,y:ty-rnd(8,38),vx:-2,vy:0,l:8,c:'#ffffff'});
+}
+
+const BK=1.6; // tamaño de los ciclistas
+// ---------- Corredores ----------
+const COLS=[
+ {shirt:'#ffcd75',stripe:'#ef7d57',leg:'#3b5dc9',legB:'#1f3a8a',frame:'#e43b44',frame2:'#b13e53',helmet:'#38b764'}, // tú
+ {shirt:'#e43b44',stripe:'#f4f4f4',leg:'#1a1c2c',legB:'#0d0e16',frame:'#f4f4f4',frame2:'#94b0c2',helmet:'#e43b44'},
+ {shirt:'#38b764',stripe:'#a7f070',leg:'#1a1c2c',legB:'#0d0e16',frame:'#257179',frame2:'#1a4a50',helmet:'#a7f070'},
+ {shirt:'#f4f4f4',stripe:'#e43b44',leg:'#1a1c2c',legB:'#0d0e16',frame:'#3b5dc9',frame2:'#29366f',helmet:'#ffcd75'},
+ {shirt:'#b13e53',stripe:'#ffcd75',leg:'#5d275d',legB:'#3a1a3a',frame:'#ffcd75',frame2:'#ef7d57',helmet:'#73eff7'},
+];
+const HERO_X=240;
+// 3 equipos de 2: el tuyo (tú + compañero a tus órdenes) y 2 rivales
+const ALL=[
+ {name:'TU',me:1,team:0,col:COLS[0],w:HERO_X},
+ {name:'COMPI',mate:1,team:0,col:COLS[0],w:HERO_X-38,pow:1.02,grimpeur:1.05},
+ {name:'ROJO1',team:1,col:COLS[1],w:HERO_X+40,pow:1.03,grimpeur:.9},
+ {name:'ROJO2',team:1,col:COLS[1],w:HERO_X-50,pow:1.0,grimpeur:1.0},
+ {name:'VERDE1',team:2,col:COLS[2],w:HERO_X-30,pow:.98,grimpeur:1.3},
+ {name:'VERDE2',team:2,col:COLS[2],w:HERO_X+120,pow:1.01,grimpeur:1.1},
+];
+let mode='carrera', riders=ALL; // en 'entreno' solo corréis tú y tu compi, sin meta
+ALL.forEach(r=>r.w0=r.w);
+// equipos rivales: el 1 es el líder, el 2 su gregario
+[[2,3],[4,5]].forEach(([l,gg])=>{ const L=ALL[l], G=ALL[gg]; L.role='lead'; G.role='greg'; L.greg=G; G.leader=L; });
+const me=riders[0], mate=riders[1];
+// Reinicio sin recargar la página
+function bolt(x,y,on){ const c=on?'#ffcd75':'#4a5470'; // rayito de 5x7
+  [[2,0],[3,0],[1,1],[2,1],[0,2],[1,2],[2,2],[3,2],[4,2],[2,3],[3,3],[1,4],[2,4],[1,5],[0,6]].forEach(([a,b])=>px(x+a,y+b,c)); }
+// ---------- 🚗 Coche de equipo y avituallamiento ----------
+let carW=0, carV=0, avitUsed=false;
+// Coche dibujado píxel a píxel en un lienzo propio y luego girado con la pendiente
+const CS=2; // escala del coche
+const carCv=document.createElement('canvas'); carCv.width=64; carCv.height=46;
+const cg=carCv.getContext('2d');
+function carInside(x,y){ // silueta: carrocería + cabina (ranchera), mirando a la derecha
+  const body = y>=-16 && y<=-5 && x>=-27 && x<=27 && !(x>22 && y < -16+(x-22)*1.1) && !(x<-25 && y<-14);
+  const cab  = y>=-26 && y<-16 && x>=-25+(y+26)*-.1 && x<=16+(y+16)*.9;
+  const arch = Math.hypot(x+17,y+5)<8.5 || Math.hypot(x-17,y+5)<8.5;
+  return (body||cab) && !arch; }
+function drawCar(){
+  const x0=carW-dist; if(x0<-40||x0>W+40) return;
+  const a=slope(carW), ty=terrain(carW);
+  cg.clearRect(0,0,64,46); const P=(x,y,c)=>{ cg.fillStyle=c; cg.fillRect(32+x,44+y,1,1); };
+  // sombra
+  cg.fillStyle='rgba(0,0,0,.25)'; cg.fillRect(32-26,43,52,2);
+  // carrocería con contorno, brillo arriba y sombra abajo
+  for(let y=-27;y<=-4;y++) for(let x=-28;x<=28;x++){ if(!carInside(x,y)) continue;
+    const edge=!carInside(x+1,y)||!carInside(x-1,y)||!carInside(x,y+1)||!carInside(x,y-1);
+    let c = y<-16 ? '#ffcd75' : y<=-14 ? '#fff3b0' : y>=-7 ? '#ef7d57' : '#ffcd75';
+    if(y===-11||y===-10) c='#e43b44';                              // franja del equipo
+    if(y===-9 && x>-26 && x<26) c='#b13e53';
+    if(edge) c='#1a1c2c';
+    P(x,y,c); }
+  // ventanas (con reflejo) y pilares
+  for(let y=-24;y<=-18;y++) for(let x=-23;x<=15;x++){ if(!carInside(x,y)||!carInside(x+2,y)||!carInside(x-2,y)||!carInside(x,y-2)) continue;
+    if(x===-7||x===-6||x===4) continue;
+    const glint=(x+y*-.8)%9<2; P(x,y, glint?'#f4f4f4' : y<-21?'#a7f0ff':'#73eff7'); }
+  // conductor
+  [[9,-22],[10,-22],[9,-21],[10,-21],[8,-20],[9,-20],[10,-20],[11,-20]].forEach(([x,y])=>P(x,y,'#29366f'));
+  // puertas, maneta, panel del patrocinador
+  for(let y=-15;y<=-6;y++){ P(-7,y,'#1a1c2c'); P(5,y,'#1a1c2c'); }
+  P(-4,-13,'#1a1c2c'); P(-3,-13,'#1a1c2c'); P(8,-13,'#1a1c2c'); P(9,-13,'#1a1c2c');
+  cg.fillStyle='#f4f4f4'; cg.fillRect(32-22,44-15,12,4); cg.fillStyle='#e43b44'; cg.fillRect(32-21,44-14,3,2); cg.fillRect(32-16,44-14,4,2);
+  // faros, piloto, parachoques
+  P(26,-13,'#fff3b0'); P(26,-12,'#fff3b0'); P(25,-13,'#fff3b0'); P(-27,-14,'#e43b44'); P(-27,-13,'#e43b44');
+  cg.fillStyle='#333c57'; cg.fillRect(32+20,44-6,8,2); cg.fillRect(32-28,44-6,7,2);
+  // ruedas que giran
+  [-17,17].forEach(wx=>{ for(let y=-6;y<=6;y++) for(let x=-6;x<=6;x++){ const d=Math.hypot(x,y);
+      if(d<=6) P(wx+x,-6+y, d>4.6?'#1a1c2c': d>3.2?'#333c57':'#94b0c2'); }
+    const s=carW*.25; for(let k=0;k<3;k++){ const an=s+k*2.09; P(wx+Math.round(Math.cos(an)*2.5),-6+Math.round(Math.sin(an)*2.5),'#566c86'); }
+    P(wx,-6,'#f4f4f4'); });
+  // baca con dos bicis de repuesto
+  cg.fillStyle='#1a1c2c'; cg.fillRect(32-21,44-28,30,1); cg.fillRect(32-18,44-30,1,2); cg.fillRect(32+4,44-30,1,2);
+  [[-19,'#e43b44'],[-3,'#3b5dc9']].forEach(([bx,fc])=>{ const w1=[bx,-34], w2=[bx+9,-34];
+    [w1,w2].forEach(([x,y])=>{ for(let k=0;k<16;k++){ const an=k/16*6.283; P(x+Math.round(Math.cos(an)*3),y+Math.round(Math.sin(an)*3),'#1a1c2c'); } });
+    for(let i=0;i<=9;i++) P(bx+i,-34-(i>2&&i<7?2:1),fc); P(bx+4,-35,fc); P(bx+4,-36,fc); P(bx+9,-37,'#1a1c2c'); P(bx+3,-37,'#1a1c2c'); });
+  // luz del techo y antena
+  const on=t%40<20; P(11,-27,on?'#ef7d57':'#8b3a2a'); P(12,-27,on?'#ef7d57':'#8b3a2a'); if(on){ P(11,-28,'#fff3b0'); P(12,-28,'#ffcd75'); }
+  for(let i=0;i<6;i++) P(-24-Math.round(i*.4),-27-i,'#1a1c2c');
+  // al mundo: girado según la pendiente, sin suavizado
+  g.save(); g.translate(Math.round(x0),Math.round(ty)); g.rotate(a); g.imageSmoothingEnabled=false; g.drawImage(carCv,-32*CS,-44*CS,64*CS,46*CS); g.restore();
+  text('COCHE',x0-10,ty-44*CS-6,'#ffcd75');
+}
+// ---------- ⚡ Boosts: 3 por equipo y etapa, compartidos entre los dos corredores ----------
+const BOOST_F=240, TEAM_NAME=['TU EQUIPO','ROJO','VERDE'], TEAM_COL=['#ffcd75','#e43b44','#38b764'];
+let BOOSTS=[3,3,3];
+function useBoost(r){ if(BOOSTS[r.team]<=0 || r.boostT>0 || r.done || podium || inMenu) return false;
+  BOOSTS[r.team]--; r.boostT=BOOST_F;
+  toast={txt:r.me?'BOOST!':r.mate?'COMPI BOOST!':`${r.name} BOOST!`,t:90};
+  for(let k=0;k<24;k++) trail.push({x:r.w-dist,y:terrain(r.w)-rnd(0,40),vx:rnd(-2,2),vy:rnd(-2,0),l:30,c:k%2?'#ffcd75':'#f4f4f4'});
+  return true; }
+function resetRace(){
+  BOOSTS=[3,3,3]; avitUsed=false; carW=HERO_X-90; document.querySelector('#orders .avit')?.classList.remove('used');
+  riders = mode==='entreno' ? ALL.slice(0,2) : ALL;
+  document.body.classList.toggle("entreno",mode==="entreno");
+  riders.forEach((r,i)=>Object.assign(r,{w:r.w0,speed:1.2,crank:i,climb:0,energy:100,tired:false,draft:false,atk:0,done:false,cost:0,mode:'',relay:null,lanza:false,boostT:0}));
+  results=[]; finishT=0; podium=false; t=0; trail=[]; boost=false; camY=alt(me.w)-CAM;
+  if(typeof setOrder==='function') setOrder('esperar','A POR ELLOS');
+}
+
+// ---------- Botonera de órdenes al compañero ----------
+const ORD_TXT={atacar:'ATACANDO',tirar:'TIRANDO',esperar:'CONTIGO',libre:'LIBRE',relevos:'RELEVOS',avit:'AL COCHE'};
+let toast={txt:'',t:0};
+function setOrder(o,msg){ if(o==='atacar' && (mate.tired||mate.energy<20)){ toast={txt:'COMPI SIN FUERZAS',t:90}; return; }
+  if(o==='avit'){ if(avitUsed) return; if(BOOSTS[0]>=3){ toast={txt:'YA TIENES 3 BOOST',t:90}; return; } avitUsed=true; mate.avPhase='baja'; document.querySelector('#orders .avit').classList.add('used'); }
+  mate.order=o; if(o==='relevos') mate.rel=mate.energy>35&&!mate.tired?'tira':'rueda'; toast={txt:msg||('COMPI: '+ORD_TXT[o]),t:90};
+  document.querySelectorAll('#orders button').forEach(b=>b.classList.toggle('on',b.dataset.o===o)); }
+document.querySelectorAll('#orders button').forEach(b=>b.addEventListener('click',()=>{ if(podium) return; if(b.dataset.o==='boost') useBoost(mate); else setOrder(b.dataset.o); }));
+const bBtn=document.getElementById('boost'), bCount=document.getElementById('bcount');
+bBtn.addEventListener('pointerdown',e=>{ e.preventDefault(); e.stopPropagation(); useBoost(me); });
+const mbar=document.querySelector('#mbar b');
+
+// ---------- Menú principal ----------
+let inMenu=true; document.body.classList.add('menu');
+function startGame(m){ mode=m; resetRace(); inMenu=false; document.body.classList.remove('menu');
+  toast={txt:m==='entreno'?'ENTRENAMIENTO':'A POR LA ETAPA',t:120}; }
+function openMenu(){ inMenu=true; podium=false; boost=false; mode='carrera'; resetRace(); document.body.classList.add('menu'); }
+document.querySelectorAll('#menu button').forEach(b=>b.addEventListener('click',e=>{ e.stopPropagation(); startGame(b.dataset.m); }));
+let paused=false;
+function setPause(on){ paused=on; boost=false; document.body.classList.toggle("paused",on); }
+document.getElementById("mode").addEventListener("click",e=>{ e.currentTarget.blur(); setPause(true); });
+document.querySelectorAll("#pause button").forEach(b=>b.addEventListener("click",e=>{ e.stopPropagation(); const a=b.dataset.p;
+  setPause(false); if(a==="reiniciar") startGame(mode); if(a==="salir") openMenu(); }));
+addEventListener('keydown',e=>{ if(inMenu||podium) return; if(e.code==='Escape'||e.code==='KeyP') setPause(!paused); else if(e.code==='KeyM') { setPause(false); openMenu(); } });
+let energy=100, tired=false, sprinting=false;
+
+// ---------- Meta en alto: la primera cima grande pasados ~9 km ----------
+const FINISH=(()=>{ let x=3600; while(!(altL(x)<altL(x-20)&&altL(x)<=altL(x+20))) x+=5; return x; })();
+let results=[], finishT=0, podium=false;
+resetRace();
+const clock=f=>{ const s=f/60; return `${Math.floor(s/60)}:${String(Math.floor(s%60)).padStart(2,'0')}`; };
+
+function drawPodium(){
+  t++;
+  const sky=['#29366f','#3b5dc9','#41a6f6','#73eff7','#a7f0ff','#ffe8b0'];
+  sky.forEach((c,i)=>{ g.fillStyle=c; g.fillRect(0,i*45,W,45); });
+  const GY=220; g.fillStyle="#38b764"; g.fillRect(0,GY,W,3); g.fillStyle="#8b5a2b"; g.fillRect(0,GY+3,W,H);
+  // escalones: 2º, 1º, 3º
+  const steps=[{i:1,x:300,h:22,c:'#94b0c2'},{i:0,x:350,h:34,c:'#ffcd75'},{i:2,x:400,h:14,c:'#ef7d57'}];
+  steps.forEach(s=>{ const top=GY-s.h; g.fillStyle='#1a1c2c'; g.fillRect(s.x-21,top-1,42,s.h+1);
+    g.fillStyle=s.c; g.fillRect(s.x-20,top,40,s.h); g.fillStyle='rgba(255,255,255,.35)'; g.fillRect(s.x-20,top,40,2);
+    text(String(s.i+1),s.x-1,top+5,'#1a1c2c');
+    const r=results[s.i].r, hop=s.i===0?Math.abs(Math.sin(t*.12))*4:0; // el ganador salta de alegría
+    r.climb=0; bike(r,s.x,0,top-hop); });
+  if(t%5===0) trail.push({x:rnd(290,410),y:-2,vx:rnd(-.3,.3),vy:rnd(.4,1),l:200,c:['#e43b44','#ffcd75','#73eff7','#38b764','#f4f4f4'][t%5]});
+  trail.forEach(p=>{ p.x+=p.vx+Math.sin(t*.1+p.y)*.2; p.y+=p.vy; p.l--; px(p.x,p.y,p.c); }); trail=trail.filter(p=>p.l>0&&p.y<H);
+  // clasificación
+  g.fillStyle='rgba(26,28,44,.8)'; g.fillRect(4,24,120,14+results.length*9);
+  text('CLASIFICACION',8,28,'#ffcd75');
+  results.forEach((res,i)=>{ const y=40+i*9, gap=res.f-results[0].f;
+    text(`${i+1} ${res.r.name}`,8,y,res.r.me?'#ffcd75':'#f4f4f4');
+    text(i===0?clock(res.f):`+${clock(gap)}`,90,y,i===0?'#fff':'#94b0c2'); });
+  const my=results.findIndex(x=>x.r.me)+1;
+  text(my===1?'HAS GANADO LA ETAPA':`HAS QUEDADO ${my}`,W/2-(my===1?38:28),8,my===1?'#ffcd75':'#fff');
+  if(t%60<40) text('ESPACIO / CLIC: MENU PRINCIPAL',8,H-12,'#fff');
+  requestAnimationFrame(frame);
+}
+
+// ---------- Bucle ----------
+function frame(){
+  if(podium) return drawPodium();
+  if(paused) return requestAnimationFrame(frame);
+  t++;
+  // equipos rivales: deciden si hacer relevos (persiguen a alguien que va por delante)
+  riders.filter(r=>r.role==='lead').forEach(L=>{ const G=L.greg, T=L.relay||(L.relay={on:false,p:null});
+    const chase=!L.done && riders.some(x=>x.team!==L.team && x.w-L.w>40 && x.w-L.w<700);
+    const fresh=[L,G].filter(x=>!x.tired && !x.done && x.energy>20);
+    T.on = chase && fresh.length>0 && Math.abs(G.w-L.w)<120;
+    if(!T.on){ T.p=null; return; }
+    if(!T.p || T.p.energy<20 || T.p.tired){ const q=fresh.filter(x=>x!==T.p).sort((a,b)=>b.energy-a.energy)[0];
+      T.p = q && q.energy>55 ? q : (T.p && !T.p.tired && T.p.energy>=20 ? T.p : null); } // relevo al que esté más fresco
+    if(!T.p) T.on=false; });
+  // física: subir cuesta frena, bajar acelera; la postura sigue a la pendiente
+  riders.forEach(r=>{ const a=slope(r.w), s=Math.sin(a), up=Math.max(0,-s);
+    // ⚡ boost rival: el líder lo guarda para el final o para atacar en subida; el gregario para cazar escapadas
+    if(!r.me && !r.mate && mode==='carrera' && !r.boostT && !r.done && BOOSTS[r.team]>0){
+      const toGo=FINISH-r.w, ahead=riders.some(x=>x.team!==r.team && x.w-r.w>30 && x.w-r.w<300);
+      let p=0;
+      if(r.role==='lead'){ if(toGo>0 && toGo<700) p=.012; else if(s<-.08 && ahead) p=.0025; }
+      else if(ahead && r.leader && Math.abs(r.leader.w-r.w)<60) p=.0015;
+      if(Math.random()<p) useBoost(r); }
+    if(r.boostT>0) r.boostT--;
+    const boosting=r.boostT>0;
+    let base;
+    // ir a rueda: alguien justo delante corta el viento
+    r.draft=riders.some(o=>o!==r && o.w-r.w>20 && o.w-r.w<55);
+    if(r.mate && mate.order==='relevos'){ // relevos: tira mientras puede, se recupera a tu rueda y vuelve a tirar
+      if(mate.rel==='tira' && (mate.energy<20||mate.tired)){ mate.rel='rueda'; toast={txt:'COMPI: A TU RUEDA',t:90}; }
+      else if(mate.rel==='rueda' && mate.energy>70 && !mate.tired){ mate.rel='tira'; toast={txt:'COMPI: RELEVO',t:90}; } }
+    const o=r.mate?(mate.order==='relevos'?(mate.rel==='tira'?'lanzar':'esperar'):mate.order):null, pulling=(o==='tirar'||o==='lanzar') && !r.tired; r.pulling=pulling;
+    r.lanza=o==='lanzar' && !r.tired;
+    const spend=r.me ? (boost && !r.tired) : o ? (o==='atacar' && !r.tired) : (r.atk>0 && !r.tired);
+    const resting=r.mate && mate.order==='relevos' && mate.rel==='rueda'; // descanso de relevos: recarga visible, sin prisas
+    if(!boosting) r.energy=Math.max(0,Math.min(100,r.energy+(spend?-.6:pulling?(r.lanza?-.3:-.08):r.cost?-r.cost:resting?.15:r.draft?.6:.25)));
+    if(r.energy<=0){ r.tired=true; r.atk=0; if(mate.order==='atacar'||mate.order==='tirar') setOrder('esperar','COMPI AGOTADO'); }
+    else if(r.tired && r.energy>=25) r.tired=false; // vacía: bloqueo hasta recargar un 25%
+    const sprint=spend && !r.tired, drag=r.draft?.15:0, clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+    // tu compi tirando fuerte delante: su rebufo te arrastra a su ritmo
+    const towed=r.me && mate.pulling && riders.includes(mate) && mate.w-r.w>20 && mate.w-r.w<60;
+    if(r.me){ sprinting=sprint; energy=r.energy; tired=r.tired; base=(sprint?2.6:1.5+(towed?(mate.lanza?1.1:.6):0))+drag; }
+    else if(o==='atacar') base=(sprint?2.9:1.5)+drag;                 // atacar: a tope y se va solo, no te espera
+    else if(o==='lanzar') base=2.6+clamp((me.w+36-r.w)*.05,-.8,.8);  // relevo: esprint delante de ti, turno corto
+    else if(o==='tirar') base=2.1+clamp((me.w+36-r.w)*.05,-.8,.8);   // tirar: ritmo fuerte y sostenido, sentado
+    else if(o==='avit'){ // 🍌 avituallamiento: baja al coche, carga bidones y vuelve contigo
+      const stop=carW+74;
+      if(mate.avPhase==='baja'){ base=1.5+clamp((stop-r.w)*.03,-1.1,.2); if(Math.abs(r.w-stop)<10){ mate.avPhase='carga'; mate.avT=180; toast={txt:'COMPI EN EL COCHE',t:80}; } }
+      else if(mate.avPhase==='carga'){ base=carV+clamp((stop-r.w)*.08,-.8,.8);
+        if(t%6===0) trail.push({x:carW-dist+16,y:terrain(carW)-24,vx:rnd(.6,1.4),vy:rnd(-1.6,-.8),l:24,c:['#73eff7','#ffcd75','#38b764'][t%3]});
+        if(--mate.avT<=0){ mate.avPhase='sube'; toast={txt:'COMPI VUELVE CON COMIDA',t:90}; } }
+      else { base=2.4+drag; if(r.w>me.w-45){ BOOSTS[0]=Math.min(3,BOOSTS[0]+1); mate.avPhase=''; setOrder('esperar','AVITUALLAMIENTO +1 BOOST');
+        for(let k=0;k<30;k++) trail.push({x:HERO_X,y:terrain(me.w)-rnd(10,50),vx:rnd(-2,2),vy:rnd(-2,0),l:40,c:k%2?'#ffcd75':'#38b764'}); } } }
+    else if(o==='esperar') base=1.5+drag+clamp((me.w-38-r.w)*.05,-.8,1.3); // va detrás de ti (aguanta tu rueda aunque esprintes) ahorrando fuerzas
+    else if(r.team>0 && (r.role==='lead'?r:r.leader).relay?.on){
+      // relevos rivales: uno esprinta delante y el otro va a su rueda arrastrado, y se turnan
+      const L=r.role==='lead'?r:r.leader, T=L.relay, P=T.p, other=r===L?L.greg:L;
+      if(r===P){ r.lanza=true; r.mode='tira'; r.cost=.3; r.atk=0; base=2.6+clamp((other.w+36-r.w)*.05,-.8,.8); }
+      else { const tow=P.w-r.w>20 && P.w-r.w<60; r.mode='espera'; r.cost=-.15; r.atk=0;
+        base=1.5+drag+(tow?1.1:0)+clamp((P.w-36-r.w)*.05,-.8,1.3); } }
+    else if(r.role==='greg' && !r.tired && !r.leader.done && !r.leader.tired){
+      // gregario rival: trabaja para su líder
+      const L=r.leader, gap=L.w-r.w;
+      const threat=riders.some(x=>x.team!==r.team && x.w-L.w>15 && x.w-L.w<220 && (x.atk>0 || (x.me&&sprinting) || (x.mate&&mate.order==='atacar')));
+      if(gap>30){ r.mode='alcanza'; r.cost=.05; base=1.5*r.pow+clamp(gap*.02,0,.7)+drag; }              // su líder se ha ido: a por él
+      else if(gap<-50){ r.mode='espera'; r.cost=0; base=1.5+drag+clamp((L.w-38-r.w)*.05,-.8,.8); }    // su líder se ha quedado: lo espera
+      else { r.mode='tira'; r.cost=threat?.12:.025;                                                     // tira del líder; si alguien ataca, persigue
+        base=1.5*r.pow+.12+(threat?.45:0)+clamp((L.w+36-r.w)*.03,-.3,.3); }
+      r.atk=0; }
+    else { r.mode=''; r.cost=0;
+      const toGo=FINISH-r.w, G=r.greg;
+      // ataques: el líder espera a las subidas y al final; todos esprintan en los últimos metros
+      const p=toGo<1500 ? .02 : r.role==='lead' ? (s<-.08?.008:.001) : .003;
+      if(!r.atk && !r.tired && r.energy>60 && Math.random()<p) r.atk=rnd(60,160);
+      if(!r.atk && !r.tired && toGo<300 && toGo>0 && r.energy>15) r.atk=300;
+      if(r.atk) r.atk=Math.max(0,r.atk-1);
+      if(G && G.mode==='tira' && !r.atk && Math.abs(G.w-36-r.w)<40) base=1.5*r.pow+.12+drag+clamp((G.w-36-r.w)*.05,-.8,.8); // a rueda de su gregario
+      else base=1.5*r.pow*(1+up*(r.grimpeur-1)*2) + (sprint?.7:0) + drag + (!r.mate && Math.abs(me.w-r.w)<60 ? Math.max(-.2,Math.min(.2,(me.w-r.w)*.004))*(s<-.08?.25:1) : 0); } // goma solo a corta distancia, al 25% en subida
+    if(boosting) base=3.2; // ⚡ boost: más rápido que cualquier esprint y sin gastar energía
+    // s<0 = subida: la gravedad divide la velocidad (y el rebufo cuenta menos); s>0 = bajada: acelera
+    const target = s<0 ? base/(1+up*5) : base+s*5;
+    r.speed+=(Math.max(.4,target)-r.speed)*.04; r.w+=r.speed;
+    if(mode==="carrera" && !inMenu && !r.done && r.w>=FINISH){ r.done=true; results.push({r,f:t}); if(r.me) finishT=t; }
+    r.crank+=r.speed*.22*(1-up*.6)+up*.08;               // cadencia más lenta y pesada al subir
+    const want= (s<-.08 || sprint || r.lanza || boosting) ? 1 :   // de pie al subir o al esprintar
+ (s>.08 && r.speed>2 ? -1 : 0); // 1 = de pie, -1 = acoplado
+    r.climb+=(want-r.climb)*.06; });
+  if(finishT && t===finishT) for(let k=0;k<60;k++) trail.push({x:HERO_X,y:rnd(20,90),vx:rnd(-2,2),vy:rnd(-1.5,.5),l:70,c:['#e43b44','#ffcd75','#73eff7','#38b764'][k%4]});
+  if(finishT && t-finishT>200){ // los que no han llegado: tiempo estimado por lo que les falta
+    riders.filter(r=>!r.done).forEach(r=>results.push({r,f:t+Math.round((FINISH-r.w)/Math.max(r.speed,.6))}));
+    results.sort((a,b)=>a.f-b.f); podium=true; trail=[]; t=0; }
+  speed=me.speed; dist=me.w-HERO_X; km=dist/400;
+  { const grp=riders.filter(r=>!(r.mate && mate.order==='avit')), tgt=Math.min(...grp.map(r=>r.w))-140, prev=carW;
+    carW+=(tgt-carW)*.05; carW=Math.max(carW,dist+62); carV=carW-prev; }
+  camY+=(alt(me.w)-CAM-camY)*.08; // la cámara sigue al ciclista en vertical
+  const heroX=HERO_X, ang=slope(me.w);
+
+  // cielo por bandas
+  const sky=['#29366f','#3b5dc9','#41a6f6','#73eff7','#a7f0ff','#ffe8b0'];
+  sky.forEach((c,i)=>{ g.fillStyle=c; g.fillRect(0,i*26,W,26); }); g.fillStyle="#ffe8b0"; g.fillRect(0,156,W,H);
+  disc(W-80,44,10,'#fff3b0'); disc(W-80,44,8,'#ffcd75');
+  clouds.forEach(c=>{ c.x-=speed*.1; if(c.x<-30){c.x=W+10;c.y=rnd(8,50);} g.fillStyle='#f4f4f4';
+    g.fillRect(c.x|0,c.y,c.w,3); g.fillRect((c.x|0)+3,c.y-2,c.w-6,2); });
+  birds.forEach(b=>{ b.x-=speed*.3+.3; if(b.x<-5){b.x=W+rnd(0,60);b.y=rnd(20,50);} const f=Math.sin(t*.25+b.p)>0;
+    px(b.x,b.y,'#1a1c2c'); px(b.x-1,b.y-(f?1:0),'#1a1c2c'); px(b.x+1,b.y-(f?1:0),'#1a1c2c'); });
+
+  // capas parallax
+  const oF=(camY-alt(110)+CAM)*-.15, oM=(camY-alt(110)+CAM)*-.35; // parallax vertical
+  for(let x=0;x<W;x++){ const y=far(x+dist*.2)+oF|0; g.fillStyle='#8b93af'; g.fillRect(x,y,1,H-y); if(far(x+dist*.2)<148) px(x,y,'#f4f4f4'); }
+  for(let x=0;x<W;x++){ const y=mid(x+dist*.5)+oM|0; g.fillStyle='#5a9e7a'; g.fillRect(x,y,1,H-y); }
+  // árboles medios
+  for(let i=0;i<8;i++){ const x=((i*53-dist*.5)%(W+40)+W+40)%(W+40)-20, y=mid(x+dist*.5)+oM|0;
+    g.fillStyle='#257179'; for(let j=0;j<10;j+=2){ const w=(10-j)/2|0; g.fillRect(x-w|0,y-j-3,w*2+1,2);} }
+
+  // terreno principal
+  for(let x=0;x<W;x++){ const wx2=x+dist, y=terrain(wx2)|0;
+    g.fillStyle='#38b764'; g.fillRect(x,y,1,3); g.fillStyle='#8b5a2b'; g.fillRect(x,y+3,1,H-y);
+    if(((wx2|0)%7)===0) px(x,y+8+((wx2|0)%5),'#6b4420');
+    if(((wx2|0)%11)===0) px(x,y-1,'#6bd48a'); }
+  // carretera (línea discontinua)
+  for(let x=0;x<W;x++){ if(((x+dist)|0)%12<6) px(x,terrain(x+dist)+1,'#f4f4f4'); }
+
+  // banderas km
+  // arco de meta a cuadros
+  { const x=Math.round(FINISH-dist), y=Math.round(terrain(FINISH));
+    if(mode==='carrera' && x>-40&&x<W+40){ line(x-16,y,x-16,y-40,'#1a1c2c'); line(x+16,y,x+16,y-40,'#1a1c2c'); line(x-15,y,x-15,y-40,'#94b0c2'); line(x+15,y,x+15,y-40,'#94b0c2');
+      for(let i=0;i<16;i++) for(let j=0;j<3;j++){ g.fillStyle=(i+j)%2?'#1a1c2c':'#f4f4f4'; g.fillRect(x-16+i*2,y-42+j*2,2,2); }
+      text('META',x-7,y-49,'#ffcd75');
+      for(let i=0;i<8;i++) px(x-14+i*4,y+1,(i%2)?'#1a1c2c':'#f4f4f4'); } }
+  flags.filter(f=>f<FINISH).forEach((f,i)=>{ const x=f-dist; if(x>-10&&x<W+10){ const y=terrain(f)|0; line(x,y,x,y-18,'#1a1c2c');
+    const wave=Math.sin(t*.2)>0?1:0; g.fillStyle=i%2?'#e43b44':'#ffcd75'; g.fillRect(x+1|0,y-18,6,3+wave); g.fillRect(x+1|0,y-15,4,2);
+    if(x<heroX&&x>heroX-speed-1) for(let k=0;k<20;k++) trail.push({x:heroX,y:y-20,vx:rnd(-1.5,1.5),vy:rnd(-2,0),l:40,c:['#e43b44','#ffcd75','#73eff7','#38b764'][k%4]}); } });
+
+  // estela de velocidad
+  const ty=terrain(me.w);
+  if(speed>2.2 && t%2===0) trail.push({x:heroX-12,y:ty-rnd(4,26),vx:-2,vy:0,l:10,c:'#ffffff'});
+  riders.forEach(r=>{ const x=r.w-dist; if(t%6===0 && x>-20 && x<W+20) trail.push({x:x-10,y:terrain(r.w)-1,vx:-.6,vy:-.3,l:14,c:'#c9a27a'}); });
+  trail.forEach(p=>{ p.x+=p.vx; p.y+=p.vy; if(!p.len) p.vy+=p.c==='#ffffff'?0:.08; p.l--;
+    if(p.len){ g.globalAlpha=Math.min(1,p.l/6); g.fillStyle=p.c; g.fillRect(Math.round(p.x),Math.round(p.y),p.len,1); g.globalAlpha=1; } else px(p.x,p.y,p.c); });
+  trail=trail.filter(p=>p.l>0);
+
+  drawCar();
+  // rivales (detrás) y tú (delante)
+  riders.filter(r=>!r.me).concat([me]).forEach(r=>{ const x=r.w-dist;
+    if(x>-30 && x<W+30){ g.fillStyle='rgba(0,0,0,.25)'; g.fillRect(x-17,terrain(r.w),35,1); bike(r,x,slope(r.w)); }
+    else if(!r.me){ const ax=x<0?2:W-6, ay=terrain(dist+(x<0?0:W))-40; text(x<0?'<':'>',ax,ay,r.col.shirt); } });
+
+  // HUD
+  const pos=1+riders.filter(r=>r.w>me.w).length;
+  text(`${km.toFixed(2)} KM`,6,6,'#fff'); text(`${(speed*18).toFixed(0)} KM/H`,6,14,speed>2.2?'#ffcd75':'#fff');
+  if(mode==='carrera') text(`POS ${pos}/${riders.length}`,6,22,pos===1?'#ffcd75':'#fff'); else text('ENTRENO',6,22,'#73eff7');
+  // ⚡ boosts que le quedan a cada equipo
+  const teams=mode==='carrera'?[0,1,2]:[0];
+  g.fillStyle='rgba(26,28,44,.7)'; g.fillRect(W-78,24,74,6+teams.length*9);
+  teams.forEach((tm,i)=>{ const y=28+i*9; text(TEAM_NAME[tm],W-74,y,TEAM_COL[tm]);
+    for(let k=0;k<Math.max(3,BOOSTS[tm]);k++) bolt(W-26+k*7-(BOOSTS[tm]>3?7:0),y-1,k<BOOSTS[tm]); });
+  text(`ALT ${Math.round(600+(118-alt(me.w))*2)} M`,6,30,'#c9d4ff');
+  text(clock(finishT||t),W/2+46,6,'#fff');
+  if(finishT) text('LLEGADA',W/2-14,40,t%20<14?'#ffcd75':'#e43b44');
+  else if(mode==='carrera') text(`META ${Math.max(0,(FINISH-me.w)/400).toFixed(1)} KM`,W/2+46,14,'#f4f4f4');
+  const grad=-Math.tan(ang)*100; if(Math.abs(grad)>=3) text(`${grad>0?'+':'-'}${Math.abs(grad).toFixed(0)}%`,W-22,14,grad>0?'#e43b44':'#38b764');
+  profile();
+  // barra de energía
+  const bx=W/2-40, by=6, bw=80, fill=Math.round(bw*energy/100);
+  const col=tired?(t%20<10?'#e43b44':'#5d275d'):energy>50?'#38b764':energy>25?'#ffcd75':'#ef7d57';
+  g.fillStyle='#1a1c2c'; g.fillRect(bx-1,by-1,bw+2,8); g.fillStyle='#333c57'; g.fillRect(bx,by,bw,6);
+  g.fillStyle=col; g.fillRect(bx,by,fill,6); g.fillStyle='rgba(255,255,255,.35)'; g.fillRect(bx,by,fill,2);
+  for(let i=1;i<4;i++) px(bx+i*bw/4,by+5,'#1a1c2c');
+  mbar.style.width=mate.energy.toFixed(0)+'%'; mbar.style.background=mate.tired?'#e43b44':mate.energy>50?'#38b764':mate.energy>25?'#ffcd75':'#ef7d57';
+  if(toast.t>0){ toast.t--; text(toast.txt,W/2-toast.txt.length*2,52,toast.t%16<11?'#73eff7':'#f4f4f4'); }
+  document.querySelector('#orders .avit').classList.toggle('full',BOOSTS[0]>=3 && !avitUsed);
+  bCount.textContent='⚡'.repeat(BOOSTS[0])+'·'.repeat(Math.max(0,3-BOOSTS[0])); bBtn.classList.toggle('empty',BOOSTS[0]===0); bBtn.classList.toggle('on',me.boostT>0);
+  sBtn.style.setProperty('--e',energy.toFixed(0)); sBtn.style.setProperty('--c',col);
+  sBtn.classList.toggle('on',sprinting); sBtn.classList.toggle('tired',tired);
+  text(tired?'AGOTADO':sprinting?'ESPRINT':me.draft?'A RUEDA +':'ENERGIA',W/2-16,by+9,tired?'#e43b44':sprinting?'#ffcd75':me.draft?'#73eff7':'#fff');
+  const s=Math.sin(ang); text(s<-.08?'SUBIDA':s>.08?'BAJADA':'LLANO',W-30,6,s<-.08?'#e43b44':s>.08?'#38b764':'#fff');
+  if(t<260) text('MANTEN ESPACIO / CLIC PARA ESPRINTAR',W/2-70,34,'#fff');
+  requestAnimationFrame(frame);
+}
+
+// ---------- Perfil del recorrido (mini mapa) ----------
+// Carrera: toda la etapa de salida a meta. Entreno: ventana que avanza contigo.
+const PW=200, PH=40, PX=8, PY=H-PH-12;
+function profile(){
+  const race=mode==='carrera', x0=race?HERO_X-40:me.w-800, span=race?FINISH-x0+60:6800, X=w=>PX+(w-x0)/span*PW;
+  const hs=[]; let lo=1e9, hi=-1e9;
+  for(let i=0;i<PW;i++){ const a=altL(x0+i/PW*span); hs.push(a); lo=Math.min(lo,a); hi=Math.max(hi,a); }
+  const sy=a=>PY+12+(a-lo)/(hi-lo||1)*(PH-20);
+  // panel
+  g.fillStyle='#1a1c2c'; g.fillRect(PX-4,PY-4,PW+8,PH+16); g.fillStyle='#262b44'; g.fillRect(PX-3,PY-3,PW+6,PH+14);
+  text(race?'ETAPA':'RECORRIDO',PX,PY-1,'#ffcd75');
+  // montaña coloreada por dureza; lo ya recorrido, apagado
+  const meI=X(me.w);
+  for(let i=0;i<PW;i++){ const wx=x0+i/PW*span, y=sy(hs[i])|0, d=(altL(wx+60)-altL(wx-60))/2;
+    let c= d<-6 ? '#e43b44' : d<-2.4 ? '#ef7d57' : d>2.4 ? '#38b764' : '#94b0c2';
+    if(PX+i<meI) c='#4a5470';
+    g.fillStyle=c; g.fillRect(PX+i,y,1,PY+PH-y); px(PX+i,y,PX+i<meI?'#8b93af':'#f4f4f4'); }
+  // eje de km
+  g.fillStyle='#1a1c2c'; g.fillRect(PX,PY+PH,PW,1);
+  const step=race?1600:1200; for(let w=Math.ceil(x0/step)*step; w<x0+span; w+=step){ const x=X(w)|0; if(x<PX||x>PX+PW-8) continue;
+    g.fillStyle='#8b93af'; g.fillRect(x,PY+PH+1,1,2); text(String(Math.round(w/400)),x-2,PY+PH+4,'#8b93af'); }
+  // meta: bandera a cuadros grande
+  if(race){ const x=X(FINISH)|0, y=sy(altL(FINISH))|0; line(x,y,x,y-13,'#f4f4f4');
+    for(let a=0;a<6;a++) for(let b=0;b<4;b++){ g.fillStyle=(a+b)%2?'#1a1c2c':'#f4f4f4'; g.fillRect(x+1+a,y-13+b,1,1); }
+    text('META',x-20,y-12,'#f4f4f4'); }
+  // rivales
+  riders.filter(r=>!r.me).forEach(r=>{ const x=X(r.w); if(x<PX||x>PX+PW) return;
+    const y=sy(altL(r.w)); g.fillStyle='#1a1c2c'; g.fillRect(x-2|0,y-5|0,4,4); g.fillStyle=r.col.shirt; g.fillRect(x-1|0,y-4|0,2,2); });
+  // tú: línea vertical + marcador parpadeante
+  { const x=meI|0, y=sy(altL(me.w))|0; g.fillStyle='rgba(255,205,117,.5)'; g.fillRect(x,PY+10,1,PH-10);
+    g.fillStyle='#1a1c2c'; g.fillRect(x-3,y-7,7,7); g.fillStyle=t%30<20?'#ffcd75':'#ef7d57'; g.fillRect(x-2,y-6,5,5);
+    text('TU',Math.min(x-3,PX+PW-8),PY+5,'#ffcd75'); }
+  // datos: lo que falta y la próxima cima
+  let best=null; for(let x=me.w+20;x<me.w+6000;x+=20){ if(altL(x)<altL(x-20)&&altL(x)<=altL(x+20)){ best=x; break; } }
+
+  const cima = best && (!race || best<FINISH-50) ? `CIMA ${((best-me.w)/400).toFixed(1)} KM` : '';
+  if(cima) text(cima,PX+(race?26:42),PY-1,'#94b0c2');
+}
+
+// Fuente 3x5
+const G5={A:[7,5,7,5,5],B:[6,5,6,5,6],C:[7,4,4,4,7],D:[6,5,5,5,6],E:[7,4,6,4,7],F:[7,4,6,4,4],G:[7,4,5,5,7],H:[5,5,7,5,5],I:[7,2,2,2,7],J:[1,1,1,5,7],K:[5,5,6,5,5],L:[4,4,4,4,7],M:[5,7,7,5,5],N:[6,5,5,5,5],O:[7,5,5,5,7],P:[7,5,7,4,4],R:[7,5,6,5,5],S:[7,4,7,1,7],T:[7,2,2,2,2],U:[5,5,5,5,7],V:[5,5,5,5,2],X:[5,5,2,5,5],Y:[5,5,2,2,2],'0':[7,5,5,5,7],'1':[2,6,2,2,7],'2':[7,1,7,4,7],'3':[7,1,3,1,7],'4':[5,5,7,1,1],'5':[7,4,7,1,7],'6':[7,4,7,5,7],'7':[7,1,1,1,1],'8':[7,5,7,5,7],'9':[7,5,7,1,7],'/':[1,1,2,4,4],'.':[0,0,0,0,2],'-':[0,0,7,0,0],'+':[0,2,7,2,0],'%':[5,1,2,4,5],'^':[2,5,0,0,0],'!':[2,2,2,0,2],'?':[7,1,2,0,2],Q:[7,5,5,7,1],W:[5,5,7,7,5],':':[0,2,0,2,0],'<':[1,2,4,2,1],'>':[4,2,1,2,4],' ':[0,0,0,0,0]};
+function text(s,x,y,col){ x|=0;y|=0; [...s].forEach((ch,i)=>{ (G5[ch]||G5[' ']).forEach((row,j)=>{ for(let b=0;b<3;b++) if(row&(4>>b)){ px(x+i*4+b+1,y+j+1,'#1a1c2c'); px(x+i*4+b,y+j,col);} }); }); }
+
+frame();
+if('serviceWorker' in navigator && location.protocol!=='file:') navigator.serviceWorker.register('../../sw.js').catch(()=>{});
+</script>
+</body>
+</html>

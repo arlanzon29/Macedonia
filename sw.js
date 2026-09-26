@@ -4,13 +4,14 @@
    queda), y de paso los juegos funcionan sin conexión. */
 'use strict';
 
-const CACHE = 'macedonia-v1';
+const CACHE = 'macedonia-v2';
 
 const ASSETS = [
   './',
   './index.html',
   './games/escuadron/index.html',
   './games/convoy/index.html',
+  './games/ciclista/index.html',
   './manifest.webmanifest',
   './icon.svg',
   './icon-maskable.svg'
