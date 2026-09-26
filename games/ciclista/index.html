@@ -73,11 +73,13 @@
   #orders button:hover { background:#41507a; }
   #orders button:active { transform:translateY(3px); box-shadow:0 1px 0 #0d0e16; }
   #orders button.on { background:#ffcd75; color:#1a1c2c; box-shadow:0 4px 0 #ef7d57; }
-  #rotate { position:fixed; inset:0; z-index:9; display:none; flex-direction:column; align-items:center; justify-content:center; gap:18px;
-    background:#0b0d17; color:#f4f4f4; font:bold 16px monospace; text-align:center; padding:24px; }
-  #rotate b { font-size:64px; animation:turn 1.6s ease-in-out infinite; }
-  @keyframes turn { 0%,20% { transform:rotate(0); } 60%,100% { transform:rotate(-90deg); } }
-  @media (orientation:portrait) and (pointer:coarse) { #rotate { display:flex; } }
+  /* Móvil en vertical (sin giro automático o sin bloqueo de orientación): giramos todo 90°.
+     El transform hace del body el contenedor de los position:fixed, así los botones giran con él. */
+  @media (orientation:portrait) and (pointer:coarse) {
+    html { overflow:hidden; }
+    body { position:absolute; top:0; left:0; width:100vh; height:100vw; transform-origin:top left; transform:rotate(90deg) translateY(-100%); }
+    canvas { width:min(100vh, 177.7vw); }
+  }
   @media (max-width:560px){ #orders button{min-width:48px;font-size:9px} #orders button em{font-size:15px} #sprint{width:80px;height:80px} }
 </style>
 </head>
@@ -92,7 +94,6 @@
   <button data-p="reiniciar">🔄 REINICIAR</button>
   <button data-p="salir">🚪 SALIR AL MENÚ</button>
 </div>
-<div id="rotate"><b>📱</b>Gira el móvil<br>para jugar en horizontal</div>
 <div id="menu">
   <h1>PIXEL<br><span>CICLISMO</span></h1>
   <button data-m="carrera"><em>🏁</em>CARRERA<small>6 corredores · 3 equipos · final en alto</small></button>

@@ -4,7 +4,7 @@
    queda), y de paso los juegos funcionan sin conexión. */
 'use strict';
 
-const CACHE = 'macedonia-v4';
+const CACHE = 'macedonia-v5';
 
 const ASSETS = [
   './',
