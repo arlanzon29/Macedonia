@@ -4,7 +4,8 @@
    queda), y de paso los juegos funcionan sin conexión. */
 'use strict';
 
-const CACHE = 'macedonia-v5';
+// Al subir la versión, cambiar también el texto "vN" (class="ver") en index.html y games/ciclista/index.html
+const CACHE = 'macedonia-v6';
 
 const ASSETS = [
   './',
