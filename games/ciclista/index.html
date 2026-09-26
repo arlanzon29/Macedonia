@@ -73,6 +73,11 @@
   #orders button:hover { background:#41507a; }
   #orders button:active { transform:translateY(3px); box-shadow:0 1px 0 #0d0e16; }
   #orders button.on { background:#ffcd75; color:#1a1c2c; box-shadow:0 4px 0 #ef7d57; }
+  #rotate { position:fixed; inset:0; z-index:9; display:none; flex-direction:column; align-items:center; justify-content:center; gap:18px;
+    background:#0b0d17; color:#f4f4f4; font:bold 16px monospace; text-align:center; padding:24px; }
+  #rotate b { font-size:64px; animation:turn 1.6s ease-in-out infinite; }
+  @keyframes turn { 0%,20% { transform:rotate(0); } 60%,100% { transform:rotate(-90deg); } }
+  @media (orientation:portrait) and (pointer:coarse) { #rotate { display:flex; } }
   @media (max-width:560px){ #orders button{min-width:48px;font-size:9px} #orders button em{font-size:15px} #sprint{width:80px;height:80px} }
 </style>
 </head>
@@ -87,6 +92,7 @@
   <button data-p="reiniciar">🔄 REINICIAR</button>
   <button data-p="salir">🚪 SALIR AL MENÚ</button>
 </div>
+<div id="rotate"><b>📱</b>Gira el móvil<br>para jugar en horizontal</div>
 <div id="menu">
   <h1>PIXEL<br><span>CICLISMO</span></h1>
   <button data-m="carrera"><em>🏁</em>CARRERA<small>6 corredores · 3 equipos · final en alto</small></button>
@@ -324,7 +330,11 @@ const mbar=document.querySelector('#mbar b');
 
 // ---------- Menú principal ----------
 let inMenu=true; document.body.classList.add('menu');
-function startGame(m){ mode=m; resetRace(); inMenu=false; document.body.classList.remove('menu');
+// En móvil: pantalla completa + bloqueo en horizontal (Android; en iOS queda el aviso de girar)
+function landscape(){ const d=document.documentElement;
+  if(!matchMedia('(pointer:coarse)').matches || document.fullscreenElement || !d.requestFullscreen) return;
+  d.requestFullscreen({navigationUI:'hide'}).then(()=>screen.orientation?.lock?.('landscape')).catch(()=>{}); }
+function startGame(m){ landscape();mode=m; resetRace(); inMenu=false; document.body.classList.remove('menu');
   toast={txt:m==='entreno'?'ENTRENAMIENTO':'A POR LA ETAPA',t:120}; }
 function openMenu(){ inMenu=true; podium=false; boost=false; mode='carrera'; resetRace(); document.body.classList.add('menu'); }
 document.querySelectorAll('#menu button').forEach(b=>b.addEventListener('click',e=>{ e.stopPropagation(); startGame(b.dataset.m); }));
