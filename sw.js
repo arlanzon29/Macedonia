@@ -4,8 +4,8 @@
    queda), y de paso los juegos funcionan sin conexión. */
 'use strict';
 
-// Al subir la versión, cambiar también el texto "vN" (class="ver") en index.html, games/ciclista/index.html y games/sala-vr/index.html
-const CACHE = 'macedonia-v7';
+// Al subir la versión, cambiar también el texto "vN" (class="ver") en index.html, games/ciclista/index.html, games/sala-vr/index.html y games/sala-ar/index.html
+const CACHE = 'macedonia-v8';
 
 const ASSETS = [
   './',
@@ -14,6 +14,7 @@ const ASSETS = [
   './games/convoy/index.html',
   './games/ciclista/index.html',
   './games/sala-vr/index.html',
+  './games/sala-ar/index.html',
   './manifest.webmanifest',
   './icon.svg',
   './icon-maskable.svg'

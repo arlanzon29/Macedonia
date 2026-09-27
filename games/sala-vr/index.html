@@ -13,12 +13,42 @@ const FLOOR = 0;
 const ROOM = 3.8;       // media anchura de la sala (paredes)
 const TABLE = { x: 0, z: -1.2, w: 1.6, d: 0.9, top: 0.78 };
 
+// Choques entre objetos (aproximados como cilindros verticales: radio horizontal
+// data-radio, o data-size si no lo hay; media altura data-size).
+// Si el objeto está por encima de otro, devuelve la altura a la que se apoya en él;
+// si están al mismo nivel, los separa en horizontal para que no se atraviesen.
+function colisiones(c) {
+  const p = c.el.object3D.position;
+  let apoyo = -Infinity;
+  for (const el of document.querySelectorAll('.agarrable')) {
+    const o = el.components.agarrable;
+    if (!o || o === c || o.holder) continue;
+    const q = el.object3D.position;
+    const dx = p.x - q.x, dz = p.z - q.z;
+    const dist = Math.hypot(dx, dz);
+    const r = c.radio + o.radio;
+    if (dist >= r) continue;
+    const encima = p.y - q.y >= (c.size + o.size) * 0.5;
+    if (encima) {
+      apoyo = Math.max(apoyo, q.y + o.size + c.size);
+    } else if (Math.abs(p.y - q.y) < c.size + o.size) {
+      const n = dist > 1e-4 ? 1 / dist : 0;
+      const empuje = (r - dist) / 2;
+      p.x += (n ? dx * n : 1) * empuje;
+      p.z += dz * n * empuje;
+      c.vel.x *= 0.5; c.vel.z *= 0.5;
+    }
+  }
+  return apoyo;
+}
+
 AFRAME.registerComponent('agarrable', {
   init() {
     this.el.classList.add('agarrable');
     this.vel = new THREE.Vector3();
     this.holder = null;
     this.size = this.el.getAttribute('data-size') ? parseFloat(this.el.getAttribute('data-size')) : 0.06;
+    this.radio = parseFloat(this.el.getAttribute('data-radio')) || this.size;
   },
   tick(t, dt) {
     if (this.holder || !dt) return;
@@ -28,7 +58,8 @@ AFRAME.registerComponent('agarrable', {
     p.addScaledVector(this.vel, s);
     // suelo o mesa
     const onTable = Math.abs(p.x - TABLE.x) < TABLE.w / 2 && Math.abs(p.z - TABLE.z) < TABLE.d / 2;
-    const ground = (onTable && p.y > TABLE.top - 0.1 ? TABLE.top : FLOOR) + this.size;
+    let ground = (onTable && p.y > TABLE.top - 0.1 ? TABLE.top : FLOOR) + this.size;
+    ground = Math.max(ground, colisiones(this));
     if (p.y < ground) {
       p.y = ground;
       this.vel.y = Math.abs(this.vel.y) > 0.6 ? -this.vel.y * 0.35 : 0;
@@ -205,7 +236,7 @@ AFRAME.registerComponent('raton-agarre', {
 </style>
 </head>
 <body>
-<a class="back" href="../../index.html">← Arcade · <span class="ver">v7</span></a>
+<a class="back" href="../../index.html">← Arcade · <span class="ver">v8</span></a>
 <script>
   // En VR la mira sobra: se oculta al entrar y vuelve al salir.
   document.addEventListener('DOMContentLoaded', () => {
@@ -270,11 +301,11 @@ AFRAME.registerComponent('raton-agarre', {
   <!-- Objetos que se pueden coger -->
   <a-box agarrable data-size="0.05" position="-0.4 0.83 -1.1" width="0.1" height="0.1" depth="0.1" material="color: #e8564d"></a-box>
   <a-sphere agarrable data-size="0.06" position="0 0.84 -1.0" radius="0.06" material="color: #4a90d9"></a-sphere>
-  <a-cylinder agarrable data-size="0.07" position="0.4 0.85 -1.15" radius="0.04" height="0.14" material="color: #ffcd75"></a-cylinder>
+  <a-cylinder agarrable data-size="0.07" data-radio="0.04" position="0.4 0.85 -1.15" radius="0.04" height="0.14" material="color: #ffcd75"></a-cylinder>
   <a-box agarrable data-size="0.04" position="0.2 0.82 -1.4" width="0.08" height="0.08" depth="0.08" material="color: #38b764"></a-box>
   <a-dodecahedron agarrable data-size="0.06" position="-0.15 0.84 -1.45" radius="0.06" material="color: #b86bd9"></a-dodecahedron>
 
-  <a-text value="Sala VR v7
+  <a-text value="Sala VR v8
 VR: coge con el boton de agarre o pellizcando\nJoystick adelante: apunta a un circulo y suelta. Lados: girar\nMonitor: WASD + raton, clic coge/suelta, clic derecho lanza" align="center"
           position="0 2.1 -3.9" width="4" color="#233"></a-text>
 </a-scene>
