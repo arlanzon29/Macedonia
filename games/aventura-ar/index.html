@@ -57,12 +57,14 @@ const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 
 // --- niebla del borde de la maqueta (solo en AR) ---
 // Todo lo que está entre NIEBLA.z y NIEBLA.w (en metros, desde el centro NIEBLA.xy de la
-// maqueta) se va tiñendo de bruma y deshaciendo en un tramado de píxeles; más allá no
-// se dibuja. Así los árboles y enemigos van apareciendo poco a poco al desplazarse.
+// maqueta, midiendo en cuadrado girado según NIEBLA_GIRO = coseno y seno del giro) se va
+// tiñendo de bruma y deshaciendo en un tramado de píxeles; más allá no se dibuja.
+// Así los árboles y enemigos van apareciendo poco a poco al desplazarse.
 // Se mete en los trozos comunes de los shaders de three para que afecte a todo.
 const NIEBLA = { value: new THREE.Vector4(0, 0, 1e8, 2e8) };
+const NIEBLA_GIRO = { value: new THREE.Vector2(1, 0) };
 const SIN_NIEBLA = { value: new THREE.Vector4(0, 0, 1e8, 2e8) };
-THREE.ShaderChunk.common += '\nuniform vec4 NIEBLA;\nvarying vec2 vNieblaW;\n';
+THREE.ShaderChunk.common += '\nuniform vec4 NIEBLA;\nuniform vec2 NIEBLA_GIRO;\nvarying vec2 vNieblaW;\n';
 THREE.ShaderChunk.project_vertex += `
   vec4 nieblaP = vec4(transformed, 1.0);
   #ifdef USE_INSTANCING
@@ -70,13 +72,15 @@ THREE.ShaderChunk.project_vertex += `
   #endif
   vNieblaW = (modelMatrix * nieblaP).xz;`;
 THREE.ShaderChunk.clipping_planes_fragment += `
-  float niebla = 1.0 - smoothstep(NIEBLA.z, NIEBLA.w, distance(vNieblaW, NIEBLA.xy));
+  vec2 nieblaL = vNieblaW - NIEBLA.xy;
+  nieblaL = vec2(dot(nieblaL, NIEBLA_GIRO), dot(nieblaL, vec2(-NIEBLA_GIRO.y, NIEBLA_GIRO.x)));
+  float niebla = 1.0 - smoothstep(NIEBLA.z, NIEBLA.w, max(abs(nieblaL.x), abs(nieblaL.y)));
   const float BAYER4[16] = float[16](0., 8., 2., 10., 12., 4., 14., 6., 3., 11., 1., 9., 15., 7., 13., 5.);
   ivec2 bq = ivec2(mod(floor(gl_FragCoord.xy), 4.0));
   if (niebla * 16.0 <= BAYER4[bq.x + bq.y * 4] + 0.5) discard;`;
 THREE.ShaderChunk.dithering_fragment += `
   gl_FragColor.rgb = mix(gl_FragColor.rgb, vec3(0.86, 0.9, 0.95), (1.0 - niebla) * 0.7);`;
-THREE.Material.prototype.onBeforeCompile = sh => { sh.uniforms.NIEBLA = NIEBLA; };
+THREE.Material.prototype.onBeforeCompile = sh => { sh.uniforms.NIEBLA = NIEBLA; sh.uniforms.NIEBLA_GIRO = NIEBLA_GIRO; };
 
 // --- material "PS1": iluminación por vértice y vértices ajustados a una rejilla de pantalla (tiemblan) ---
 // (en AR el temblor se quita: con la cabeza moviéndose marea)
@@ -84,7 +88,7 @@ const SNAP = { value: new THREE.Vector2(320, 180) };
 function mat(opts) {
   const m = new THREE.MeshLambertMaterial({ flatShading: true, ...opts });
   m.onBeforeCompile = sh => {
-    sh.uniforms.SNAP = SNAP; sh.uniforms.NIEBLA = NIEBLA;
+    sh.uniforms.SNAP = SNAP; sh.uniforms.NIEBLA = NIEBLA; sh.uniforms.NIEBLA_GIRO = NIEBLA_GIRO;
     sh.vertexShader = 'uniform vec2 SNAP;\n' + sh.vertexShader.replace('#include <project_vertex>',
       '#include <project_vertex>\n  gl_Position.xy = floor(gl_Position.xy / gl_Position.w * SNAP + 0.5) / SNAP * gl_Position.w;');
   };
@@ -743,15 +747,18 @@ say('¡Kael, despierta! Ahora el valle es de tres dimensiones. FLECHAS: moverte 
 const AR = { k: .1, r: .3, centro: new THREE.Vector3(0, .8, -.55), giro: 0 };
 const EJE_Y = new THREE.Vector3(0, 1, 0);
 const arFoco = new THREE.Vector3(), arTmp = new THREE.Vector3(), arQ = new THREE.Quaternion();
-// la maqueta es un círculo: nítida hasta 2/3 del radio y con niebla hasta el borde
-function situarRecorte() { NIEBLA.value.set(AR.centro.x, AR.centro.z, AR.r * .65, AR.r); }
+// la maqueta es un cuadrado (girado con ella): nítida en el centro y con niebla en todo el reborde
+function situarRecorte() {
+  NIEBLA.value.set(AR.centro.x, AR.centro.z, AR.r * .65, AR.r);
+  NIEBLA_GIRO.value.set(Math.cos(AR.giro), -Math.sin(AR.giro));
+}
 const yawDe = d => Math.atan2(-d.x, -d.z);   // giro horizontal de una dirección (0 = mirando a -z)
 const hudC = document.createElement('canvas'); hudC.width = W; hudC.height = H;
 const hudTex = new THREE.CanvasTexture(hudC);
 hudTex.magFilter = hudTex.minFilter = THREE.NearestFilter; hudTex.generateMipmaps = false; hudTex.colorSpace = THREE.SRGBColorSpace;
 const panel = new THREE.Mesh(new THREE.PlaneGeometry(.56, .315),
   new THREE.MeshBasicMaterial({ map: hudTex, transparent: true, depthTest: false, fog: false }));
-panel.material.onBeforeCompile = sh => { sh.uniforms.NIEBLA = SIN_NIEBLA; };   // el HUD no se difumina
+panel.material.onBeforeCompile = sh => { sh.uniforms.NIEBLA = SIN_NIEBLA; sh.uniforms.NIEBLA_GIRO = NIEBLA_GIRO; };   // el HUD no se difumina
 panel.material.customProgramCacheKey = () => 'hud';
 panel.renderOrder = 10; panel.visible = false; scene.add(panel);
 const arKeys = {};
@@ -837,6 +844,6 @@ function loop(now, frame) {
 document.fonts.load('8px "Press Start 2P"').finally(() => { document.getElementById('loading').remove(); renderer.setAnimationLoop(loop); });
 window.dbg = { get hero() { return hero; }, get enemies() { return enemies; }, get state() { return state; }, press, release, map, cuttable, NIEBLA };
 </script>
-<a href="../../index.html" id="back-menu" title="Volver al Arcade" onmouseenter="this.style.opacity=1" onmouseleave="this.style.opacity=.7" style="opacity:.7;position:fixed;bottom:14px;left:14px;z-index:9999;font:bold 11px/1 'Press Start 2P',monospace;color:#1a1020;background:#f0c040;padding:8px 10px;text-decoration:none;box-shadow:inset -3px -3px #b07820,0 0 0 3px #1a1020;">← ARCADE · <span class="ver">v12</span></a>
+<a href="../../index.html" id="back-menu" title="Volver al Arcade" onmouseenter="this.style.opacity=1" onmouseleave="this.style.opacity=.7" style="opacity:.7;position:fixed;bottom:14px;left:14px;z-index:9999;font:bold 11px/1 'Press Start 2P',monospace;color:#1a1020;background:#f0c040;padding:8px 10px;text-decoration:none;box-shadow:inset -3px -3px #b07820,0 0 0 3px #1a1020;">← ARCADE · <span class="ver">v13</span></a>
 </body>
 </html>
