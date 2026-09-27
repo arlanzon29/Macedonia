@@ -1,0 +1,496 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>Naves AR</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { background:#050a1a; height:100vh; overflow:hidden; font-family:'Press Start 2P', monospace; user-select:none; }
+  canvas { display:block; }
+  #ar-btn { position:fixed; top:14px; right:14px; z-index:10; display:none; font:inherit; font-size:11px; color:#050a1a;
+            background:#3ff0ff; border:0; padding:8px 10px; cursor:pointer; box-shadow:inset -3px -3px #1a86d8,0 0 0 3px #050a1a; }
+  #back { position:fixed; bottom:14px; left:14px; z-index:10; font-size:11px; color:#050a1a; background:#ff3fa8;
+          padding:8px 10px; text-decoration:none; box-shadow:inset -3px -3px #a0206a,0 0 0 3px #050a1a; opacity:.8; }
+</style>
+</head>
+<body>
+<button id="ar-btn">ENTRAR EN AR</button>
+<a id="back" href="../../index.html">← ARCADE · <span class="ver">v15</span></a>
+<script type="module">
+import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js';
+
+// =====================================================================
+// NAVES AR: matamarcianos vertical clásico en un único plano de juego.
+// En el monitor se ve como una pantalla normal; en realidad mixta (Meta Quest) el
+// plano es una mesa de juego alargada tumbada sobre tu mesa real, con el fondo
+// transparente: la nave está en el lado cercano, los enemigos llegan desde el fondo
+// saliendo de una niebla, las estrellas quedan en capas "dentro" de la mesa (dan
+// profundidad) y el marcador está de pie en el extremo lejano.
+//   Monitor: FLECHAS / WASD mover · ESPACIO / Z disparar · ENTER empezar · M sonido
+//   AR: JOYSTICK mover · GATILLO disparar · A / X empezar ·
+//       BOTÓN DE AGARRE mantenido: la mesa de juego sigue al mando y gira con él
+// Coordenadas del juego: unidades con el origen en el centro del plano, y hacia arriba.
+// =====================================================================
+const CFG = {
+  W: 9, H: 18,                 // tamaño del plano de juego (unidades): alargado
+  px: .12,                     // tamaño de un píxel de los sprites (unidades)
+  niebla: 1.6,                 // franja superior e inferior donde las cosas se desvanecen
+  nave: { vel: 7, cadencia: .13, radio: .35, vidas: 3, invencible: 2 },
+  bala: { vel: 16 },
+  balaEnemiga: { vel: 4.2 },
+  oleada: { cada: 3.2, minimo: 1.3, aceleraPorNivel: .25 },
+  nivelCada: 25,               // segundos por nivel de dificultad
+  premio: { prob: .09, vida: .15 },
+  // metros por unidad (queda de 45 × 90 cm) y centro inicial de la mesa de juego
+  ar: { k: .05, centro: new THREE.Vector3(0, .8, -.75) },
+};
+const W = CFG.W, H = CFG.H, TOPE = H / 2, LADO = W / 2;
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const azar = (a, b) => a + Math.random() * (b - a);
+
+// =====================================================================
+// ESCENA
+// =====================================================================
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+renderer.xr.enabled = true; renderer.xr.setReferenceSpaceType('local-floor');
+document.body.appendChild(renderer.domElement);
+const scene = new THREE.Scene();
+const FONDO = new THREE.Color(0x050a1a);
+scene.background = FONDO;
+const camera = new THREE.PerspectiveCamera(50, innerWidth / innerHeight, .05, 100);
+function encuadrar() {
+  camera.aspect = innerWidth / innerHeight;
+  // que quepa el plano entero, tanto a lo alto como a lo ancho
+  const t = Math.tan(THREE.MathUtils.degToRad(camera.fov / 2));
+  camera.position.set(0, 0, Math.max((H / 2 + .8) / t, (W / 2 + .8) / (t * camera.aspect)));
+  camera.lookAt(0, 0, 0);
+  camera.updateProjectionMatrix();
+}
+encuadrar();
+addEventListener('resize', () => { if (!renderer.xr.isPresenting) { renderer.setSize(innerWidth, innerHeight); encuadrar(); } });
+
+// en AR se tumba (rotation.x) y se orienta con el agarre (rotation.y): primero el giro
+// horizontal y luego la inclinación, de ahí el orden YXZ
+const tablero = new THREE.Group(); tablero.rotation.order = 'YXZ'; scene.add(tablero);
+
+// fondo del plano: oscuro y translúcido con los bordes difuminados (en AR deja ver la habitación)
+function texturaFondo() {
+  const c = document.createElement('canvas'); c.width = 90; c.height = 140; const x = c.getContext('2d');
+  const v = x.createLinearGradient(0, 0, 0, 140);
+  v.addColorStop(0, 'rgba(5,10,26,0)'); v.addColorStop(.12, 'rgba(5,10,26,.55)');
+  v.addColorStop(.88, 'rgba(5,10,26,.55)'); v.addColorStop(1, 'rgba(5,10,26,0)');
+  x.fillStyle = v; x.fillRect(0, 0, 90, 140);
+  x.globalCompositeOperation = 'destination-in';
+  const h = x.createLinearGradient(0, 0, 90, 0);
+  h.addColorStop(0, 'rgba(0,0,0,0)'); h.addColorStop(.08, '#000'); h.addColorStop(.92, '#000'); h.addColorStop(1, 'rgba(0,0,0,0)');
+  x.fillStyle = h; x.fillRect(0, 0, 90, 140);
+  return new THREE.CanvasTexture(c);
+}
+const fondo = new THREE.Mesh(new THREE.PlaneGeometry(W + 1, H + 1),
+  new THREE.MeshBasicMaterial({ map: texturaFondo(), transparent: true, depthWrite: false }));
+fondo.position.z = -.05; fondo.visible = false; tablero.add(fondo);
+
+// estrellas en tres capas por detrás del plano (en AR, por debajo de la mesa, como si
+// se mirara por una ventana): al mover la cabeza se nota la profundidad
+const capas = [-1.5, -3.5, -6].map((z, i) => {
+  const n = 40, pos = new Float32Array(n * 3);
+  for (let j = 0; j < n; j++) { pos[j * 3] = azar(-LADO, LADO); pos[j * 3 + 1] = azar(-TOPE, TOPE); pos[j * 3 + 2] = z; }
+  const geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  const p = new THREE.Points(geo, new THREE.PointsMaterial({ color: [0xffffff, 0x9fd4ff, 0x6f7fb0][i], size: [.09, .07, .06][i], transparent: true, opacity: .85, depthWrite: false }));
+  p.userData.vel = [3, 1.8, 1][i];
+  tablero.add(p); return p;
+});
+function moverEstrellas(dt) {
+  for (const p of capas) {
+    const a = p.geometry.attributes.position;
+    for (let j = 0; j < a.count; j++) {
+      let y = a.getY(j) - p.userData.vel * dt;
+      if (y < -TOPE) { y += H; a.setX(j, azar(-LADO, LADO)); }
+      a.setY(j, y);
+    }
+    a.needsUpdate = true;
+  }
+}
+
+// --- sprites de píxeles dibujados desde texto ---
+const PAL = { c: '#3ff0ff', b: '#1a86d8', w: '#ffffff', r: '#ff8a3f', y: '#ffd24a', m: '#ff3fa8', g: '#3dff9e', p: '#b86bff', o: '#ff5a3f', k: '#e04030' };
+function sprite(rows) {
+  const c = document.createElement('canvas'); c.width = rows[0].length; c.height = rows.length; const x = c.getContext('2d');
+  rows.forEach((r, y) => [...r].forEach((ch, i) => { if (PAL[ch]) { x.fillStyle = PAL[ch]; x.fillRect(i, y, 1, 1); } }));
+  const t = new THREE.CanvasTexture(c);
+  t.magFilter = t.minFilter = THREE.NearestFilter; t.generateMipmaps = false; t.colorSpace = THREE.SRGBColorSpace;
+  return { t, w: c.width * CFG.px, h: c.height * CFG.px };
+}
+const SPR = {
+  nave:  sprite(['....c....', '...cwc...', '...cbc...', '..ccbcc..', '.cccbccc.', 'ccwcccwcc', 'cc.ccc.cc', 'c..r.r..c']),
+  nave2: sprite(['....c....', '...cwc...', '...cbc...', '..ccbcc..', '.cccbccc.', 'ccwcccwcc', 'cc.ccc.cc', 'c..y.y..c']),
+  caza:  sprite(['m.......m', 'mm.mmm.mm', '.mmmwmmm.', '..mmmmm..', '...mym...', '....m....']),
+  onda:  sprite(['..ggggg..', '.gwgwgwg.', 'ggggggggg', '.g.g.g.g.']),
+  torre: sprite(['...ppppp...', '..ppwwwpp..', '.ppppppppp.', 'pp.ppypp.pp', 'p..ppppp..p', '....ppp....', '.....p.....']),
+  bala:  sprite(['w', 'c', 'c']),
+  balaE: sprite(['.o.', 'oyo', '.o.']),
+  poder: sprite(['..y..', '.yry.', 'yrwry', '.yry.', '..y..']),
+  vida:  sprite(['.kk.kk.', 'kwkkkkk', 'kkkkkkk', '.kkkkk.', '..kkk..', '...k...']),
+  chispa: sprite(['w']),
+};
+function crear(s, x, y, escala = 1) {
+  const m = new THREE.Mesh(new THREE.PlaneGeometry(s.w * escala, s.h * escala),
+    new THREE.MeshBasicMaterial({ map: s.t, transparent: true, depthWrite: false }));
+  m.position.set(x, y, 0); tablero.add(m); return m;
+}
+function quitar(m) { tablero.remove(m); m.geometry.dispose(); m.material.dispose(); }
+// franjas de niebla arriba y abajo: lo que entra o sale del plano aparece y se va poco a poco
+function colocar(m, x, y) {
+  m.position.x = x; m.position.y = y;
+  m.material.opacity = clamp(Math.min(TOPE - y, y + TOPE) / CFG.niebla, 0, 1);
+}
+
+// =====================================================================
+// SONIDO: efectos y música sintetizados con Web Audio. Arranca con el primer gesto.
+// =====================================================================
+const SND = (() => {
+  let ac = null, master, musica, ruido, next = 0, step = 0, mudo = false;
+  const hz = n => 440 * 2 ** ((n - 69) / 12);
+  // arpegio de bajo en La menor y melodía por encima (0 = silencio), en semicorcheas
+  const BAJO = [45, 45, 57, 45, 45, 57, 45, 55, 41, 41, 53, 41, 43, 43, 55, 43];
+  const MEL = [69, 0, 72, 0, 76, 0, 74, 72, 71, 0, 72, 0, 74, 0, 0, 0, 69, 0, 72, 0, 77, 0, 76, 74, 72, 0, 71, 0, 67, 0, 0, 0];
+  const PASO = .12;
+  function init() {
+    if (ac) { ac.resume(); return; }
+    ac = new (window.AudioContext || window.webkitAudioContext)();
+    master = ac.createGain(); master.gain.value = .45; master.connect(ac.destination);
+    musica = ac.createGain(); musica.gain.value = .25; musica.connect(master);
+    ruido = ac.createBuffer(1, ac.sampleRate * .6, ac.sampleRate);
+    const d = ruido.getChannelData(0); for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+    next = ac.currentTime + .1;
+    setInterval(programar, 50);
+  }
+  function tono(f, t0, dur, tipo = 'square', vol = .12, f2 = 0, dest = master) {
+    const o = ac.createOscillator(), g = ac.createGain();
+    o.type = tipo; o.frequency.setValueAtTime(f, t0);
+    if (f2) o.frequency.exponentialRampToValueAtTime(f2, t0 + dur);
+    g.gain.setValueAtTime(vol, t0); g.gain.exponentialRampToValueAtTime(.001, t0 + dur);
+    o.connect(g).connect(dest); o.start(t0); o.stop(t0 + dur + .02);
+  }
+  function soplo(t0, dur, vol = .25, freq = 800) {
+    const s = ac.createBufferSource(), f = ac.createBiquadFilter(), g = ac.createGain();
+    s.buffer = ruido; f.type = 'lowpass'; f.frequency.setValueAtTime(freq, t0); f.frequency.exponentialRampToValueAtTime(80, t0 + dur);
+    g.gain.setValueAtTime(vol, t0); g.gain.exponentialRampToValueAtTime(.001, t0 + dur);
+    s.connect(f).connect(g).connect(master); s.start(t0); s.stop(t0 + dur + .02);
+  }
+  function programar() {
+    if (ac.state !== 'running') return;
+    while (next < ac.currentTime + .25) {
+      if (!mudo && estado === 'juego') {
+        tono(hz(BAJO[step % 16]), next, PASO * .9, 'triangle', .3, 0, musica);
+        const m = MEL[Math.floor(step / 2) % MEL.length];
+        if (step % 2 === 0 && m) tono(hz(m + 12), next, PASO * 1.8, 'square', .07, 0, musica);
+      }
+      next += PASO; step++;
+    }
+  }
+  const t = () => ac.currentTime;
+  const si = fn => (...a) => { if (ac && !mudo && ac.state === 'running') fn(...a); };
+  return {
+    init, mudo() { mudo = !mudo; },
+    disparo: si(() => tono(1400, t(), .07, 'square', .04, 500)),
+    impacto: si(() => tono(300, t(), .06, 'square', .08, 150)),
+    explosion: si(g => soplo(t(), g ? .7 : .35, g ? .45 : .3, g ? 1200 : 2500)),
+    enemigoDispara: si(() => tono(500, t(), .1, 'sawtooth', .04, 250)),
+    premio: si(() => [880, 1109, 1319, 1760].forEach((f, i) => tono(f, t() + i * .05, .1, 'square', .08))),
+    herido: si(() => { soplo(t(), .8, .5, 1500); tono(200, t(), .6, 'sawtooth', .15, 40); }),
+    inicio: si(() => [523, 659, 784, 1047].forEach((f, i) => tono(f, t() + i * .08, .15, 'square', .1))),
+    fin: si(() => [392, 330, 262, 196].forEach((f, i) => tono(f, t() + i * .22, .3, 'triangle', .3))),
+  };
+})();
+
+// =====================================================================
+// ESTADO DEL JUEGO
+// =====================================================================
+let estado = 'titulo', tiempo = 0, puntos = 0, record = 0;
+try { record = +localStorage.getItem('naves-ar-record') || 0; } catch {}
+let nave, balas = [], enemigos = [], balasE = [], premios = [], chispas = [], proxOleada = 0, fuego = 0;
+
+function nuevaPartida() {
+  for (const lista of [balas, enemigos, balasE, premios, chispas]) { lista.forEach(o => quitar(o.m)); lista.length = 0; }
+  if (nave) quitar(nave.m);
+  nave = { x: 0, y: -TOPE + 1.8, vidas: CFG.nave.vidas, poder: 1, inv: 1, m: crear(SPR.nave, 0, -TOPE + 1.8) };
+  tiempo = 0; puntos = 0; proxOleada = 1.5; fuego = 0;
+  estado = 'juego'; SND.inicio();
+}
+const nivel = () => 1 + Math.floor(tiempo / CFG.nivelCada);
+
+// --- oleadas ---
+const TIPOS = {
+  caza:  { spr: SPR.caza,  vida: 1, radio: .5, puntos: 100 },
+  onda:  { spr: SPR.onda,  vida: 1, radio: .5, puntos: 150 },
+  torre: { spr: SPR.torre, vida: 5, radio: .65, puntos: 500 },
+};
+function enemigo(tipo, x, y, extra) {
+  const T = TIPOS[tipo];
+  enemigos.push({ tipo, x, y, vida: T.vida + Math.floor(nivel() / 3) * (tipo === 'torre' ? 2 : 0), t: 0, flash: 0, ...extra, m: crear(T.spr, x, y) });
+}
+function oleada() {
+  const n = nivel(), v = 1 + (n - 1) * .12, y0 = TOPE + 1;
+  const r = Math.random();
+  if (r < .4) {                                    // V de cazas en picado
+    const cx = azar(-2, 2);
+    for (let i = -2; i <= 2; i++) enemigo('caza', cx + i * 1.1, y0 + Math.abs(i) * .9, { vy: -3.2 * v, vx: 0 });
+  } else if (r < .75) {                            // fila de ovnis ondulando
+    const cx = azar(-1.5, 1.5), lado = Math.random() < .5 ? 1 : -1;
+    for (let i = 0; i < 6; i++) enemigo('onda', cx, y0 + i * 1.1, { vy: -2.4 * v, cx, amp: 2.2, fase: i * .6, lado });
+  } else {                                         // torretas que bajan, se paran y disparan
+    const k = n >= 3 && Math.random() < .5 ? 2 : 1;
+    for (let i = 0; i < k; i++) enemigo('torre', k === 1 ? azar(-2.5, 2.5) : (i ? 2.2 : -2.2), y0, { vy: -2, parar: azar(1.5, 3.5), cadencia: 1.3 / v });
+  }
+}
+
+function explotar(x, y, color, n = 10, grande = false) {
+  for (let i = 0; i < n; i++) {
+    const a = Math.random() * 6.28, s = azar(1.5, grande ? 7 : 4.5);
+    const m = crear(SPR.chispa, x, y, azar(1, grande ? 2.2 : 1.6));
+    m.material.color.set(color);
+    chispas.push({ x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, vida: azar(.3, grande ? .9 : .5), m });
+  }
+  SND.explosion(grande);
+}
+function herir() {
+  if (nave.inv > 0) return;
+  nave.vidas--; nave.poder = Math.max(1, nave.poder - 1); nave.inv = CFG.nave.invencible;
+  explotar(nave.x, nave.y, 0x3ff0ff, 22, true); SND.herido();
+  if (nave.vidas <= 0) {
+    estado = 'fin'; nave.m.visible = false; SND.fin();
+    if (puntos > record) { record = puntos; try { localStorage.setItem('naves-ar-record', record); } catch {} }
+  }
+}
+
+// =====================================================================
+// ENTRADA: teclado en el monitor y mandos en AR, mezclados en un mismo estado
+// =====================================================================
+const teclas = {};
+addEventListener('keydown', e => {
+  SND.init();
+  teclas[e.key.toLowerCase()] = true;
+  if (e.key === 'm' || e.key === 'M') SND.mudo();
+  if ([' ', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright'].includes(e.key.toLowerCase())) e.preventDefault();
+});
+addEventListener('keyup', e => { teclas[e.key.toLowerCase()] = false; });
+addEventListener('pointerdown', () => SND.init());
+const mando = { x: 0, y: 0, fuego: false, empezar: false };
+const EJE_Y = new THREE.Vector3(0, 1, 0), tmp = new THREE.Vector3(), tmpQ = new THREE.Quaternion();
+let empezarAntes = false;
+function leerMandos(frame) {
+  mando.x = mando.y = 0; mando.fuego = mando.empezar = false;
+  if (!frame) return;
+  const ref = renderer.xr.getReferenceSpace();
+  for (const src of frame.session.inputSources) {
+    const gp = src.gamepad; if (!gp) continue;
+    const ax = gp.axes.length >= 4 ? [gp.axes[2], gp.axes[3]] : [gp.axes[0] || 0, gp.axes[1] || 0];
+    if (Math.abs(ax[0]) > Math.abs(mando.x)) mando.x = ax[0];
+    if (Math.abs(ax[1]) > Math.abs(mando.y)) mando.y = ax[1];
+    mando.fuego ||= gp.buttons[0]?.pressed;
+    mando.empezar ||= gp.buttons[4]?.pressed || gp.buttons[0]?.pressed;
+    if (gp.buttons[1]?.pressed && src.gripSpace) {       // agarre: la mesa de juego sigue al mando
+      const t = frame.getPose(src.gripSpace, ref)?.transform;
+      if (t) {
+        CFG.ar.centro.set(t.position.x, Math.max(t.position.y - .03, 0), t.position.z);
+        const o = t.orientation, f = tmp.set(0, 0, -1).applyQuaternion(tmpQ.set(o.x, o.y, o.z, o.w));
+        if (Math.hypot(f.x, f.z) > .2) tablero.rotation.y = Math.atan2(-f.x, -f.z);
+      }
+    }
+  }
+}
+function entrada() {
+  const zona = v => Math.abs(v) < .15 ? 0 : v;
+  let x = zona(mando.x) + (teclas.arrowright || teclas.d ? 1 : 0) - (teclas.arrowleft || teclas.a ? 1 : 0);
+  let y = -zona(mando.y) + (teclas.arrowup || teclas.w ? 1 : 0) - (teclas.arrowdown || teclas.s ? 1 : 0);
+  const l = Math.hypot(x, y); if (l > 1) { x /= l; y /= l; }
+  const empezar = mando.empezar || teclas.enter || teclas[' '] || teclas.z;
+  const flanco = empezar && !empezarAntes; empezarAntes = empezar;
+  return { x, y, fuego: mando.fuego || teclas[' '] || teclas.z, empezar: flanco };
+}
+
+// =====================================================================
+// ACTUALIZACIÓN
+// =====================================================================
+const toca = (a, b, r) => Math.hypot(a.x - b.x, a.y - b.y) < r;
+function actualizar(dt) {
+  moverEstrellas(dt);
+  for (const c of chispas) { c.x += c.vx * dt; c.y += c.vy * dt; c.vx *= .96; c.vy *= .96; c.vida -= dt; colocar(c.m, c.x, c.y); c.m.material.opacity *= clamp(c.vida * 3, 0, 1); }
+  for (const c of chispas) if (c.vida <= 0) quitar(c.m);
+  chispas = chispas.filter(c => c.vida > 0);
+  const inp = entrada();
+  if (estado !== 'juego') { if (inp.empezar) nuevaPartida(); return; }
+
+  tiempo += dt;
+  // --- nave ---
+  nave.x = clamp(nave.x + inp.x * CFG.nave.vel * dt, -LADO + .5, LADO - .5);
+  nave.y = clamp(nave.y + inp.y * CFG.nave.vel * dt, -TOPE + .8, TOPE - 2.5);
+  nave.inv -= dt;
+  nave.m.position.set(nave.x, nave.y, 0);
+  nave.m.visible = !(nave.inv > 0 && Math.floor(nave.inv * 12) % 2);
+  nave.m.material.map = Math.floor(tiempo * 16) % 2 ? SPR.nave.t : SPR.nave2.t;   // la llama del motor parpadea
+  fuego -= dt;
+  if (inp.fuego && fuego <= 0) {
+    fuego = CFG.nave.cadencia;
+    const salidas = nave.poder === 1 ? [[0, 0]] : nave.poder === 2 ? [[-.3, 0], [.3, 0]] : [[-.35, -.18], [0, 0], [.35, .18]];
+    for (const [dx, vx] of salidas) balas.push({ x: nave.x + dx, y: nave.y + .5, vx: vx * CFG.bala.vel, m: crear(SPR.bala, nave.x + dx, nave.y + .5) });
+    SND.disparo();
+  }
+  // --- balas propias ---
+  for (const b of balas) {
+    b.x += b.vx * dt; b.y += CFG.bala.vel * dt; colocar(b.m, b.x, b.y);
+    for (const e of enemigos) {
+      if (e.muerto || !toca(b, e, TIPOS[e.tipo].radio)) continue;
+      b.muerta = true; e.vida--; e.flash = .08; SND.impacto();
+      if (e.vida <= 0) {
+        e.muerto = true; puntos += TIPOS[e.tipo].puntos;
+        explotar(e.x, e.y, { caza: 0xff3fa8, onda: 0x3dff9e, torre: 0xb86bff }[e.tipo], e.tipo === 'torre' ? 24 : 12, e.tipo === 'torre');
+        if (Math.random() < (e.tipo === 'torre' ? .6 : CFG.premio.prob)) {
+          const vida = Math.random() < CFG.premio.vida && nave.vidas < 5;
+          premios.push({ tipo: vida ? 'vida' : 'poder', x: e.x, y: e.y, t: 0, m: crear(vida ? SPR.vida : SPR.poder, e.x, e.y) });
+        }
+      }
+      break;
+    }
+    if (b.y > TOPE + .5) b.muerta = true;
+  }
+  balas = balas.filter(b => { if (b.muerta) quitar(b.m); return !b.muerta; });
+  // --- enemigos ---
+  proxOleada -= dt;
+  if (proxOleada <= 0) { oleada(); proxOleada = Math.max(CFG.oleada.minimo, CFG.oleada.cada - (nivel() - 1) * CFG.oleada.aceleraPorNivel); }
+  for (const e of enemigos) {
+    if (e.muerto) continue;
+    e.t += dt; e.flash -= dt;
+    if (e.tipo === 'caza') { e.y += e.vy * dt; e.vy -= 1.5 * dt; }
+    else if (e.tipo === 'onda') { e.y += e.vy * dt; e.x = e.cx + Math.sin(e.t * 2.4 + e.fase) * e.amp * e.lado; }
+    else {
+      if (e.t < 6 && e.y > e.parar) e.y += e.vy * dt;
+      else if (e.t >= 6) e.y -= e.vy * 1.3 * dt;              // se retira por arriba
+      e.dispara = (e.dispara ?? 1) - dt;
+      if (e.dispara <= 0 && e.t < 6 && e.y < TOPE - .5) {
+        e.dispara = e.cadencia;
+        const dx = nave.x - e.x, dy = nave.y - e.y, d = Math.hypot(dx, dy) || 1;
+        for (const giro of nivel() >= 2 ? [-.25, 0, .25] : [0]) {
+          const c = Math.cos(giro), s = Math.sin(giro), vx = (dx * c - dy * s) / d, vy = (dx * s + dy * c) / d;
+          balasE.push({ x: e.x, y: e.y - .4, vx: vx * CFG.balaEnemiga.vel, vy: vy * CFG.balaEnemiga.vel, m: crear(SPR.balaE, e.x, e.y - .4) });
+        }
+        SND.enemigoDispara();
+      }
+    }
+    colocar(e.m, e.x, e.y);
+    e.m.material.color.setScalar(e.flash > 0 ? 3 : 1);
+    if (toca(e, nave, TIPOS[e.tipo].radio + CFG.nave.radio) && nave.inv <= 0) {
+      if (e.tipo !== 'torre') { e.muerto = true; explotar(e.x, e.y, 0xff8a3f, 10); }
+      herir();
+    }
+    if (e.y < -TOPE - 1.5 || e.y > TOPE + 3 || Math.abs(e.x) > LADO + 3) e.muerto = true;
+  }
+  enemigos = enemigos.filter(e => { if (e.muerto) quitar(e.m); return !e.muerto; });
+  // --- balas enemigas ---
+  for (const b of balasE) {
+    b.x += b.vx * dt; b.y += b.vy * dt; colocar(b.m, b.x, b.y);
+    if (estado === 'juego' && toca(b, nave, CFG.nave.radio + .12) && nave.inv <= 0) { b.muerta = true; herir(); }
+    if (Math.abs(b.x) > LADO + .5 || Math.abs(b.y) > TOPE + .5) b.muerta = true;
+  }
+  balasE = balasE.filter(b => { if (b.muerta) quitar(b.m); return !b.muerta; });
+  // --- premios ---
+  for (const p of premios) {
+    p.t += dt; p.y -= 1.6 * dt; colocar(p.m, p.x, p.y);
+    p.m.rotation.z = Math.sin(p.t * 4) * .4;
+    if (toca(p, nave, .8) && estado === 'juego') {
+      p.cogido = true; SND.premio();
+      if (p.tipo === 'vida') nave.vidas++; else if (nave.poder < 3) nave.poder++; else puntos += 1000;
+    }
+  }
+  premios = premios.filter(p => { const fuera = p.cogido || p.y < -TOPE - .5; if (fuera) quitar(p.m); return !fuera; });
+}
+
+// =====================================================================
+// HUD: un lienzo transparente del tamaño del plano, delante de todo
+// =====================================================================
+// (en AR se levanta y queda de pie sobre el extremo lejano de la mesa)
+const HC = document.createElement('canvas'); HC.width = 360; HC.height = 720;
+const hg = HC.getContext('2d');
+const hudTex = new THREE.CanvasTexture(HC); hudTex.colorSpace = THREE.SRGBColorSpace;
+const hud = new THREE.Mesh(new THREE.PlaneGeometry(W, H), new THREE.MeshBasicMaterial({ map: hudTex, transparent: true, depthTest: false, depthWrite: false }));
+hud.position.z = .1; hud.renderOrder = 10; tablero.add(hud);
+let hudAntes = '';
+function texto(s, x, y, tam, col, alin = 'left') {
+  hg.font = `${tam}px "Press Start 2P"`; hg.textAlign = alin; hg.textBaseline = 'top';
+  hg.fillStyle = '#050a1a'; hg.fillText(s, x + 2, y + 2); hg.fillStyle = col; hg.fillText(s, x, y);
+}
+function pintarHud() {
+  const parpadeo = Math.floor(performance.now() / 500) % 2;
+  const clave = [estado, puntos, record, nave?.vidas, nave?.poder, parpadeo, renderer.xr.isPresenting].join();
+  if (clave === hudAntes) return;
+  hudAntes = clave;
+  hg.clearRect(0, 0, 360, 720);
+  const ar = renderer.xr.isPresenting;
+  texto(String(puntos).padStart(6, '0'), 14, 14, 14, '#ffffff');
+  texto('HI ' + String(record).padStart(6, '0'), 346, 14, 10, '#ffd24a', 'right');
+  if (nave) {
+    for (let i = 0; i < nave.vidas; i++) texto('♥', 14 + i * 18, 36, 12, '#e04030');
+    texto('P' + nave.poder, 346, 32, 10, '#3ff0ff', 'right');
+  }
+  if (estado === 'titulo') {
+    texto('NAVES', 180, 270, 36, '#3ff0ff', 'center');
+    texto('A R', 180, 316, 24, '#ff3fa8', 'center');
+    if (parpadeo) texto(ar ? 'GATILLO: EMPEZAR' : 'ENTER: EMPEZAR', 180, 400, 12, '#ffffff', 'center');
+    texto(ar ? 'JOYSTICK MOVER · GATILLO DISPARAR' : 'FLECHAS MOVER · ESPACIO DISPARAR', 180, 440, 8, '#8ea3c9', 'center');
+    if (ar) texto('AGARRE: MOVER Y GIRAR LA MESA', 180, 460, 8, '#8ea3c9', 'center');
+  } else if (estado === 'fin') {
+    texto('FIN DE', 180, 290, 28, '#ff3fa8', 'center');
+    texto('PARTIDA', 180, 330, 28, '#ff3fa8', 'center');
+    if (puntos >= record && puntos > 0) texto('¡NUEVO RÉCORD!', 180, 380, 12, '#ffd24a', 'center');
+    if (parpadeo) texto(ar ? 'GATILLO: OTRA' : 'ENTER: OTRA', 180, 420, 12, '#ffffff', 'center');
+  }
+  hudTex.needsUpdate = true;
+}
+
+// =====================================================================
+// REALIDAD MIXTA
+// =====================================================================
+renderer.xr.addEventListener('sessionstart', () => {
+  scene.background = null; fondo.visible = true;
+  tablero.scale.setScalar(CFG.ar.k);
+  tablero.rotation.x = -Math.PI / 2;                     // tumbada: "arriba" del juego = hacia el fondo
+  hud.position.set(0, TOPE, H / 2); hud.rotation.x = Math.PI / 2;   // marcador de pie al fondo
+  arBtn.textContent = 'SALIR DE AR';
+});
+renderer.xr.addEventListener('sessionend', () => {
+  scene.background = FONDO; fondo.visible = false;
+  tablero.scale.setScalar(1); tablero.position.set(0, 0, 0); tablero.rotation.set(0, 0, 0);
+  hud.position.set(0, 0, .1); hud.rotation.x = 0;
+  arBtn.textContent = 'ENTRAR EN AR';
+  renderer.setSize(innerWidth, innerHeight); encuadrar();
+});
+const arBtn = document.getElementById('ar-btn');
+navigator.xr?.isSessionSupported('immersive-ar').then(ok => { if (ok) arBtn.style.display = 'block'; });
+arBtn.onclick = () => {
+  SND.init();
+  const s = renderer.xr.getSession();
+  if (s) { s.end(); return; }
+  navigator.xr.requestSession('immersive-ar', { optionalFeatures: ['local-floor'] }).then(s => renderer.xr.setSession(s));
+};
+
+// =====================================================================
+let ultimo = performance.now();
+function bucle(ahora, frame) {
+  const dt = Math.min(.033, (ahora - ultimo) / 1000); ultimo = ahora;
+  leerMandos(renderer.xr.isPresenting ? frame : null);
+  if (renderer.xr.isPresenting) tablero.position.copy(CFG.ar.centro);
+  actualizar(dt);
+  pintarHud();
+  renderer.render(scene, camera);
+}
+document.fonts.load('12px "Press Start 2P"').finally(() => renderer.setAnimationLoop(bucle));
+window.dbg = { get estado() { return estado; }, get nave() { return nave; }, get enemigos() { return enemigos; }, nuevaPartida };
+</script>
+</body>
+</html>
