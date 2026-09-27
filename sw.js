@@ -4,8 +4,8 @@
    queda), y de paso los juegos funcionan sin conexión. */
 'use strict';
 
-// Al subir la versión, cambiar también el texto "vN" (class="ver") en index.html y games/ciclista/index.html
-const CACHE = 'macedonia-v6';
+// Al subir la versión, cambiar también el texto "vN" (class="ver") en index.html, games/ciclista/index.html y games/sala-vr/index.html
+const CACHE = 'macedonia-v7';
 
 const ASSETS = [
   './',
@@ -41,7 +41,9 @@ self.addEventListener('activate', e => {
 self.addEventListener('fetch', e => {
   if (e.request.method !== 'GET') return;
   e.respondWith(
-    fetch(e.request)
+    // no-cache: revalida con el servidor en vez de usar la caché HTTP del navegador
+    // (GitHub Pages deja cachear 10 min y se veía la versión anterior)
+    fetch(e.request, { cache: 'no-cache' })
       .then(res => {
         if (res && res.ok && res.type === 'basic') {
           const copy = res.clone();

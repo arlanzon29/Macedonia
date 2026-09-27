@@ -95,6 +95,10 @@ AFRAME.registerComponent('teletransporte', {
     this.elegido = null;
     this.girado = false;
     this.rig = document.getElementById('rig');
+    this.rayo = new THREE.Line(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color: '#ffe066' }));
+    this.rayo.visible = false;
+    this.rayo.frustumCulled = false;
+    this.el.sceneEl.object3D.add(this.rayo);
     this.el.addEventListener('thumbstickmoved', e => this.stick(e.detail.x, e.detail.y));
   },
   puntos() { return [...document.querySelectorAll('.punto')]; },
@@ -112,11 +116,16 @@ AFRAME.registerComponent('teletransporte', {
     const d = new THREE.Vector3(0, 0, -1).applyQuaternion(this.el.object3D.getWorldQuaternion(new THREE.Quaternion()));
     let objetivo = null;
     if (d.y < -0.05) objetivo = o.clone().addScaledVector(d, -o.y / d.y);
-    let mejor = null, mejorD = 1.5;
+    let mejor = null, mejorD = 2.5;
     for (const p of this.puntos()) {
       const dist = objetivo ? p.object3D.position.distanceTo(objetivo.setY(0)) : Infinity;
       if (dist < mejorD) { mejorD = dist; mejor = p; }
     }
+    // rayo visible desde el mando hasta el círculo elegido (o 3 m hacia delante)
+    const fin = mejor ? mejor.object3D.position : o.clone().addScaledVector(d, 3);
+    this.rayo.geometry.setFromPoints([o, fin]);
+    this.rayo.material.color.set(mejor ? '#ffe066' : '#ff6b6b');
+    this.rayo.visible = true;
     if (mejor !== this.elegido) {
       this.elegido?.setAttribute('material', 'color', '#7fd4ff');
       mejor?.setAttribute('material', 'color', '#ffe066');
@@ -125,6 +134,7 @@ AFRAME.registerComponent('teletransporte', {
   },
   ir() {
     this.apuntando = false;
+    this.rayo.visible = false;
     const p = this.elegido;
     if (!p) return;
     p.setAttribute('material', 'color', '#7fd4ff');
@@ -195,7 +205,7 @@ AFRAME.registerComponent('raton-agarre', {
 </style>
 </head>
 <body>
-<a class="back" href="../../index.html">← Arcade</a>
+<a class="back" href="../../index.html">← Arcade · <span class="ver">v7</span></a>
 <script>
   // En VR la mira sobra: se oculta al entrar y vuelve al salir.
   document.addEventListener('DOMContentLoaded', () => {
@@ -264,7 +274,8 @@ AFRAME.registerComponent('raton-agarre', {
   <a-box agarrable data-size="0.04" position="0.2 0.82 -1.4" width="0.08" height="0.08" depth="0.08" material="color: #38b764"></a-box>
   <a-dodecahedron agarrable data-size="0.06" position="-0.15 0.84 -1.45" radius="0.06" material="color: #b86bd9"></a-dodecahedron>
 
-  <a-text value="VR: coge con el boton de agarre o pellizcando\nJoystick adelante: apunta a un circulo y suelta. Lados: girar\nMonitor: WASD + raton, clic coge/suelta, clic derecho lanza" align="center"
+  <a-text value="Sala VR v7
+VR: coge con el boton de agarre o pellizcando\nJoystick adelante: apunta a un circulo y suelta. Lados: girar\nMonitor: WASD + raton, clic coge/suelta, clic derecho lanza" align="center"
           position="0 2.1 -3.9" width="4" color="#233"></a-text>
 </a-scene>
 </body>
