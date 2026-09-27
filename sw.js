@@ -5,7 +5,7 @@
 'use strict';
 
 // Al subir la versión, cambiar también el texto "vN" (class="ver") en index.html, games/ciclista/index.html, games/sala-vr/index.html, games/sala-ar/index.html y games/aventura-ar/index.html
-const CACHE = 'macedonia-v11';
+const CACHE = 'macedonia-v12';
 
 const ASSETS = [
   './',

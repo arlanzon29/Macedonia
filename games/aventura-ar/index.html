@@ -55,13 +55,36 @@ const sun = new THREE.DirectionalLight(0xfff0d0, 2.2); sun.position.set(-4, 8, 5
 const hash = n => { const x = Math.sin(n * 127.1 + 311.7) * 43758.5453; return x - Math.floor(x); };
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 
+// --- niebla del borde de la maqueta (solo en AR) ---
+// Todo lo que está entre NIEBLA.z y NIEBLA.w (en metros, desde el centro NIEBLA.xy de la
+// maqueta) se va tiñendo de bruma y deshaciendo en un tramado de píxeles; más allá no
+// se dibuja. Así los árboles y enemigos van apareciendo poco a poco al desplazarse.
+// Se mete en los trozos comunes de los shaders de three para que afecte a todo.
+const NIEBLA = { value: new THREE.Vector4(0, 0, 1e8, 2e8) };
+const SIN_NIEBLA = { value: new THREE.Vector4(0, 0, 1e8, 2e8) };
+THREE.ShaderChunk.common += '\nuniform vec4 NIEBLA;\nvarying vec2 vNieblaW;\n';
+THREE.ShaderChunk.project_vertex += `
+  vec4 nieblaP = vec4(transformed, 1.0);
+  #ifdef USE_INSTANCING
+    nieblaP = instanceMatrix * nieblaP;
+  #endif
+  vNieblaW = (modelMatrix * nieblaP).xz;`;
+THREE.ShaderChunk.clipping_planes_fragment += `
+  float niebla = 1.0 - smoothstep(NIEBLA.z, NIEBLA.w, distance(vNieblaW, NIEBLA.xy));
+  const float BAYER4[16] = float[16](0., 8., 2., 10., 12., 4., 14., 6., 3., 11., 1., 9., 15., 7., 13., 5.);
+  ivec2 bq = ivec2(mod(floor(gl_FragCoord.xy), 4.0));
+  if (niebla * 16.0 <= BAYER4[bq.x + bq.y * 4] + 0.5) discard;`;
+THREE.ShaderChunk.dithering_fragment += `
+  gl_FragColor.rgb = mix(gl_FragColor.rgb, vec3(0.86, 0.9, 0.95), (1.0 - niebla) * 0.7);`;
+THREE.Material.prototype.onBeforeCompile = sh => { sh.uniforms.NIEBLA = NIEBLA; };
+
 // --- material "PS1": iluminación por vértice y vértices ajustados a una rejilla de pantalla (tiemblan) ---
 // (en AR el temblor se quita: con la cabeza moviéndose marea)
 const SNAP = { value: new THREE.Vector2(320, 180) };
 function mat(opts) {
   const m = new THREE.MeshLambertMaterial({ flatShading: true, ...opts });
   m.onBeforeCompile = sh => {
-    sh.uniforms.SNAP = SNAP;
+    sh.uniforms.SNAP = SNAP; sh.uniforms.NIEBLA = NIEBLA;
     sh.vertexShader = 'uniform vec2 SNAP;\n' + sh.vertexShader.replace('#include <project_vertex>',
       '#include <project_vertex>\n  gl_Position.xy = floor(gl_Position.xy / gl_Position.w * SNAP + 0.5) / SNAP * gl_Position.w;');
   };
@@ -385,15 +408,15 @@ function drop(x, z, chance) {
 function cut(tx, tz) {
   const key = tx + ',' + tz, o = cuttable.get(key);
   if (!o) return;
-  scene.remove(o); cuttable.delete(key); map[tz][tx] = '.';
+  scene.remove(o); cuttable.delete(key); SND.corte(); map[tz][tx] = '.';
   burst(tx + .5, .4, tz + .5, [0x48a048, 0x90d870, 0x307838], 10);
   drop(tx + .5, tz + .5, .3);
 }
 function hurt(fx, fz, dmg) {
   if (hero.inv > 0 || state !== 'play') return;
-  hero.hp -= dmg; hero.inv = 1.1; hero.knock = .16;
+  hero.hp -= dmg; hero.inv = 1.1; SND.herido(); hero.knock = .16;
   const d = Math.hypot(hero.x - fx, hero.z - fz) || 1; hero.kx = (hero.x - fx) / d * 7; hero.kz = (hero.z - fz) / d * 7;
-  if (hero.hp <= 0) { hero.hp = 0; state = 'over'; }
+  if (hero.hp <= 0) { hero.hp = 0; state = 'over'; SND.caida(); }
 }
 // la baldosa que tiene Kael delante (redondeando su orientación a 4 direcciones)
 function facingTile() {
@@ -408,12 +431,81 @@ function interact() {
   if (ch === 'S') say(SIGN_TEXT);
   else if (ch === 'D') say('La puerta de tu casa está cerrada. Mejor sigue explorando.');
   else if (ch === 'C') {
-    map[tz][tx] = 'c'; chest.opening = true; hero.maxHp += 2; hero.hp = hero.maxHp;
+    map[tz][tx] = 'c'; chest.opening = true; SND.cofre(); hero.maxHp += 2; hero.hp = hero.maxHp;
     burst(tx + .5, .6, tz + .5, [0xf0c040, 0xf0f4f8], 14, 2);
     say('¡Has encontrado un CONTENEDOR DE CORAZÓN! Tu vida máxima aumenta.');
   } else if (ch === 'c') say('El cofre está vacío.');
 }
 
+// =====================================================================
+// SONIDO: música chiptune y efectos sintetizados con Web Audio (sin archivos).
+// El navegador solo deja sonar audio tras un gesto: arranca con la primera tecla,
+// toque o al entrar en AR. M: silenciar / activar.
+// =====================================================================
+const SND = (() => {
+  let ac = null, master, musica, ruido, next = 0, step = 0, mudo = false;
+  const hz = n => 440 * 2 ** ((n - 69) / 12);
+  // melodía alegre de pueblo: 8 compases de 8 corcheas (0 = silencio)
+  const MEL = [72,0,76,0,79,0,76,0, 77,0,76,74,72,0,0,0, 74,0,77,0,81,0,77,0, 79,0,77,76,74,0,0,0,
+               72,0,76,0,79,0,84,0, 81,0,79,77,76,0,77,79, 81,79,77,76,74,0,71,0, 72,0,0,0,0,0,0,0];
+  const BAJO = [48, 53, 50, 55, 48, 53, 55, 48], CORCHEA = .18;
+  function init() {
+    if (ac) { ac.resume(); return; }
+    ac = new (window.AudioContext || window.webkitAudioContext)();
+    master = ac.createGain(); master.gain.value = .5; master.connect(ac.destination);
+    musica = ac.createGain(); musica.gain.value = .3; musica.connect(master);
+    ruido = ac.createBuffer(1, ac.sampleRate * .5, ac.sampleRate);
+    const d = ruido.getChannelData(0); for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+    next = ac.currentTime + .1;
+    setInterval(programar, 50);
+  }
+  function tono(f, t0, dur, tipo = 'square', vol = .15, f2 = 0, dest = master) {
+    const o = ac.createOscillator(), g = ac.createGain();
+    o.type = tipo; o.frequency.setValueAtTime(f, t0);
+    if (f2) o.frequency.exponentialRampToValueAtTime(f2, t0 + dur);
+    g.gain.setValueAtTime(vol, t0); g.gain.exponentialRampToValueAtTime(.001, t0 + dur);
+    o.connect(g).connect(dest); o.start(t0); o.stop(t0 + dur + .02);
+  }
+  function soplo(t0, dur, vol = .2, freq = 2000) {
+    const s = ac.createBufferSource(), f = ac.createBiquadFilter(), g = ac.createGain();
+    s.buffer = ruido; f.type = 'bandpass'; f.frequency.value = freq; f.Q.value = 1.5;
+    g.gain.setValueAtTime(vol, t0); g.gain.exponentialRampToValueAtTime(.001, t0 + dur);
+    s.connect(f).connect(g).connect(master); s.start(t0); s.stop(t0 + dur + .02);
+  }
+  // la música se programa un poco por delante del reloj de audio para que no tropiece
+  function programar() {
+    if (ac.state !== 'running') return;
+    while (next < ac.currentTime + .25) {
+      const i = step % MEL.length, b = BAJO[Math.floor(i / 8)];
+      if (!mudo && state !== 'over') {
+        if (MEL[i]) tono(hz(MEL[i]), next, CORCHEA * .9, 'square', .1, 0, musica);
+        if (i % 2 === 0) tono(hz(i % 4 ? b + 12 : b), next, CORCHEA * 1.6, 'triangle', .25, 0, musica);
+      }
+      next += CORCHEA; step++;
+    }
+  }
+  const t = () => ac.currentTime;
+  const si = fn => (...a) => { if (ac && !mudo && ac.state === 'running') fn(...a); };
+  return {
+    init,
+    mudo() { mudo = !mudo; },
+    espada: si(() => { soplo(t(), .15, .25, 3000); tono(900, t(), .1, 'square', .05, 300); }),
+    corte: si(() => soplo(t(), .12, .3, 1200)),
+    golpe: si(() => tono(260, t(), .15, 'square', .18, 70)),
+    muere: si(() => [660, 440, 220].forEach((f, i) => tono(f, t() + i * .06, .12, 'square', .14))),
+    herido: si(() => { tono(320, t(), .3, 'sawtooth', .2, 90); soplo(t(), .15, .15, 600); }),
+    gema: si(() => { tono(1318, t(), .08, 'square', .1); tono(1760, t() + .07, .15, 'square', .1); }),
+    corazon: si(() => [784, 988, 1175].forEach((f, i) => tono(f, t() + i * .07, .14, 'triangle', .25))),
+    bloqueo: si(() => { tono(1500, t(), .2, 'triangle', .25); tono(2250, t(), .12, 'square', .05); }),
+    piedra: si(() => tono(180, t(), .08, 'square', .1, 120)),
+    cofre: si(() => [523, 659, 784, 1047, 784, 1047].forEach((f, i) => tono(f, t() + i * .1, i === 5 ? .5 : .12, 'square', .14))),
+    caida: si(() => [523, 494, 466, 440, 392].forEach((f, i) => tono(f, t() + i * .18, .25, 'triangle', .3))),
+    letra: si(() => tono(880, t(), .03, 'square', .04)),
+    pagina: si(() => tono(660, t(), .06, 'square', .08, 990)),
+  };
+})();
+addEventListener('keydown', e => { SND.init(); if (e.key === 'm' || e.key === 'M') SND.mudo(); });
+addEventListener('pointerdown', () => SND.init());
 // =====================================================================
 // ENTRADA (igual que la versión 2D)
 // =====================================================================
@@ -424,14 +516,14 @@ function press(k) {
   if (state === 'dialog' && (k === 'act' || k === 'sword')) {
     const pg = dialog.pages[dialog.page], total = pg.join('').length;
     if (dialog.chars < total) dialog.chars = total;
-    else if (++dialog.page >= dialog.pages.length) { dialog = null; state = 'play'; }
-    else dialog.chars = 0;
+    else if (++dialog.page >= dialog.pages.length) { dialog = null; state = 'play'; SND.pagina(); }
+    else { dialog.chars = 0; SND.pagina(); }
     return;
   }
   if (state === 'over' && (k === 'act' || k === 'sword')) { newGame(true); return; }
   if (state !== 'play') return;
   if ((k === 'act' || k === 'sword') && facing()) { interact(); return; }
-  if (k === 'sword' && hero.atk < 0 && hero.knock <= 0) { hero.atk = 0; hero.cutDone = false; }
+  if (k === 'sword' && hero.atk < 0 && hero.knock <= 0) { hero.atk = 0; hero.cutDone = false; SND.espada(); }
 }
 function release(k) { keys[k] = false; }
 addEventListener('keydown', e => { const k = KEYMAP[e.key]; if (k) { e.preventDefault(); if (!e.repeat) press(k); } });
@@ -452,7 +544,11 @@ function update(dt) {
   parts = parts.filter(p => p.life > 0);
   T.water.offset.x = (time * .15) % 1; T.water.offset.y = Math.sin(time) * .05;
   if (chest?.opening && chest.open < 1) { chest.open = Math.min(1, chest.open + dt * 3); chest.lid.rotation.x = -1.9 * chest.open; }
-  if (state === 'dialog') { dialog.chars += dt * 45; return; }
+  if (state === 'dialog') {
+    const antes = Math.floor(dialog.chars / 3); dialog.chars += dt * 45;
+    if (Math.floor(dialog.chars / 3) > antes && dialog.chars < dialog.pages[dialog.page].join('').length) SND.letra();
+    return;
+  }
   if (state !== 'play') return;
 
   // --- Kael ---
@@ -469,8 +565,8 @@ function update(dt) {
       if (e.flash > 0) continue;
       const dx = e.x - hero.x, dz = e.z - hero.z, d = Math.hypot(dx, dz);
       if (d < 1.35 && (Math.abs(angDiff(Math.atan2(dx, dz), face)) < 1.5 || d < .5)) {
-        e.hp--; e.flash = .35; e.knock = .15; e.vx = dx / d * 7; e.vz = dz / d * 7;
-        if (e.hp <= 0) { e.dead = true; scene.remove(e.g); burst(e.x, .4, e.z, [0xf0f4f8, 0xc8d0d8, 0x8a90b0], 12); drop(e.x, e.z, .65); }
+        e.hp--; e.flash = .35; SND.golpe(); e.knock = .15; e.vx = dx / d * 7; e.vz = dz / d * 7;
+        if (e.hp <= 0) { SND.muere(); e.dead = true; scene.remove(e.g); burst(e.x, .4, e.z, [0xf0f4f8, 0xc8d0d8, 0x8a90b0], 12); drop(e.x, e.z, .65); }
       }
     }
     enemies = enemies.filter(e => !e.dead);
@@ -506,7 +602,7 @@ function update(dt) {
       const [dx, dz] = DIR4[e.dir];
       if (e.shoot > 0) {
         e.shoot -= dt;
-        if (e.shoot <= 0) { const m = mesh(rockGeo, M.rock, e.x + dx * .4, .38, e.z + dz * .4); rocks.push({ m, x: e.x + dx * .4, z: e.z + dz * .4, vx: dx * 5, vz: dz * 5 }); e.shoot = 0; e.t = .6; }
+        if (e.shoot <= 0) { SND.piedra(); const m = mesh(rockGeo, M.rock, e.x + dx * .4, .38, e.z + dz * .4); rocks.push({ m, x: e.x + dx * .4, z: e.z + dz * .4, vx: dx * 5, vz: dz * 5 }); e.shoot = 0; e.t = .6; }
       } else if (moveC(e, dx * 1.4 * dt, dz * 1.4 * dt, .25)) e.t = 0;
       e.face = Math.atan2(dx, dz);
     }
@@ -520,7 +616,7 @@ function update(dt) {
     if (Math.hypot(r.x - hero.x, r.z - hero.z) < .4) {
       r.dead = true;
       const facingRock = Math.abs(angDiff(Math.atan2(-r.vx, -r.vz), Math.atan2(hero.fx, hero.fz))) < .9;
-      if (facingRock && hero.atk < 0) burst(r.x, .45, r.z, [0xf0f4f8, 0xf0c040], 6, 2); else hurt(r.x, r.z, 1);
+      if (facingRock && hero.atk < 0) { burst(r.x, .45, r.z, [0xf0f4f8, 0xf0c040], 6, 2); SND.bloqueo(); } else hurt(r.x, r.z, 1);
     }
   }
   rocks = rocks.filter(r => { if (r.dead) scene.remove(r.m); return !r.dead; });
@@ -531,6 +627,7 @@ function update(dt) {
     p.m.visible = !(p.t > 8 && Math.floor(p.t * 10) % 2);
     if (Math.hypot(p.x - hero.x, p.z - hero.z) < .45) {
       p.dead = true;
+      if (p.kind === 'heart') SND.corazon(); else SND.gema();
       if (p.kind === 'heart') hero.hp = Math.min(hero.maxHp, hero.hp + 2); else hero.gems = Math.min(999, hero.gems + (p.kind === 'gemB' ? 5 : 1));
       burst(p.x, .4, p.z, p.kind === 'heart' ? [0xe04030, 0xf0f4f8] : [0xb8e890, 0xf0f4f8], 6, 1.5);
     }
@@ -646,20 +743,16 @@ say('¡Kael, despierta! Ahora el valle es de tres dimensiones. FLECHAS: moverte 
 const AR = { k: .1, r: .3, centro: new THREE.Vector3(0, .8, -.55), giro: 0 };
 const EJE_Y = new THREE.Vector3(0, 1, 0);
 const arFoco = new THREE.Vector3(), arTmp = new THREE.Vector3(), arQ = new THREE.Quaternion();
-const recorte = [new THREE.Plane(), new THREE.Plane(), new THREE.Plane(), new THREE.Plane()];
-function situarRecorte() {
-  // cuatro planos verticales (girados con la maqueta) que dejan ver solo el cuadrado central
-  [[1, 0], [-1, 0], [0, 1], [0, -1]].forEach(([x, z], i) => {
-    const n = new THREE.Vector3(x, 0, z).applyAxisAngle(EJE_Y, AR.giro);
-    recorte[i].setFromNormalAndCoplanarPoint(n, AR.centro.clone().addScaledVector(n, -AR.r));
-  });
-}
+// la maqueta es un círculo: nítida hasta 2/3 del radio y con niebla hasta el borde
+function situarRecorte() { NIEBLA.value.set(AR.centro.x, AR.centro.z, AR.r * .65, AR.r); }
 const yawDe = d => Math.atan2(-d.x, -d.z);   // giro horizontal de una dirección (0 = mirando a -z)
 const hudC = document.createElement('canvas'); hudC.width = W; hudC.height = H;
 const hudTex = new THREE.CanvasTexture(hudC);
 hudTex.magFilter = hudTex.minFilter = THREE.NearestFilter; hudTex.generateMipmaps = false; hudTex.colorSpace = THREE.SRGBColorSpace;
 const panel = new THREE.Mesh(new THREE.PlaneGeometry(.56, .315),
   new THREE.MeshBasicMaterial({ map: hudTex, transparent: true, depthTest: false, fog: false }));
+panel.material.onBeforeCompile = sh => { sh.uniforms.NIEBLA = SIN_NIEBLA; };   // el HUD no se difumina
+panel.material.customProgramCacheKey = () => 'hud';
 panel.renderOrder = 10; panel.visible = false; scene.add(panel);
 const arKeys = {};
 function arKey(k, on) {
@@ -710,7 +803,7 @@ renderer.xr.addEventListener('sessionstart', () => {
   SNAP.value.set(1e5, 1e5);
   scene.background = null; scene.fog = null; outside.visible = false;
   renderer.setClearColor(0x000000, 0);
-  situarRecorte(); renderer.clippingPlanes = recorte;
+  situarRecorte();
   panel.visible = true; arBtn.textContent = 'SALIR DE AR';
   if (state === 'play') say('Pon la maqueta en tu mesa con el BOTÓN DE AGARRE. JOYSTICK: moverte · GATILLO: espada · A: hablar y leer.');
 });
@@ -719,7 +812,7 @@ renderer.xr.addEventListener('sessionend', () => {
   scene.scale.setScalar(1); scene.position.set(0, 0, 0); scene.rotation.y = 0;
   SNAP.value.set(W, H);
   scene.background = new THREE.Color(SKY); scene.fog = new THREE.Fog(SKY, 9, 17); outside.visible = true;
-  renderer.setClearColor(0x000000, 1); renderer.clippingPlanes = [];
+  renderer.setClearColor(0x000000, 1); NIEBLA.value.set(0, 0, 1e8, 2e8);
   panel.visible = false; arBtn.textContent = 'ENTRAR EN AR';
   renderer.setPixelRatio(1); renderer.setSize(W, H, false);
 });
@@ -742,8 +835,8 @@ function loop(now, frame) {
   g.drawImage(renderer.domElement, 0, 0); dither(); hud();
 }
 document.fonts.load('8px "Press Start 2P"').finally(() => { document.getElementById('loading').remove(); renderer.setAnimationLoop(loop); });
-window.dbg = { get hero() { return hero; }, get enemies() { return enemies; }, get state() { return state; }, press, release, map, cuttable };
+window.dbg = { get hero() { return hero; }, get enemies() { return enemies; }, get state() { return state; }, press, release, map, cuttable, NIEBLA };
 </script>
-<a href="../../index.html" id="back-menu" title="Volver al Arcade" onmouseenter="this.style.opacity=1" onmouseleave="this.style.opacity=.7" style="opacity:.7;position:fixed;bottom:14px;left:14px;z-index:9999;font:bold 11px/1 'Press Start 2P',monospace;color:#1a1020;background:#f0c040;padding:8px 10px;text-decoration:none;box-shadow:inset -3px -3px #b07820,0 0 0 3px #1a1020;">← ARCADE · <span class="ver">v11</span></a>
+<a href="../../index.html" id="back-menu" title="Volver al Arcade" onmouseenter="this.style.opacity=1" onmouseleave="this.style.opacity=.7" style="opacity:.7;position:fixed;bottom:14px;left:14px;z-index:9999;font:bold 11px/1 'Press Start 2P',monospace;color:#1a1020;background:#f0c040;padding:8px 10px;text-decoration:none;box-shadow:inset -3px -3px #b07820,0 0 0 3px #1a1020;">← ARCADE · <span class="ver">v12</span></a>
 </body>
 </html>
