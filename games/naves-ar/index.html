@@ -18,38 +18,71 @@
 </head>
 <body>
 <button id="ar-btn">ENTRAR EN AR</button>
-<a id="back" href="../../index.html">← ARCADE · <span class="ver">v15</span></a>
+<a id="back" href="../../index.html">← ARCADE · <span class="ver">v16</span></a>
 <script type="module">
 import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js';
 
 // =====================================================================
-// NAVES AR: matamarcianos vertical clásico en un único plano de juego.
-// En el monitor se ve como una pantalla normal; en realidad mixta (Meta Quest) el
-// plano es una mesa de juego alargada tumbada sobre tu mesa real, con el fondo
-// transparente: la nave está en el lado cercano, los enemigos llegan desde el fondo
-// saliendo de una niebla, las estrellas quedan en capas "dentro" de la mesa (dan
-// profundidad) y el marcador está de pie en el extremo lejano.
+// NAVES AR: matamarcianos vertical clásico. Toda la acción ocurre en un único plano,
+// pero las naves son modelos 3D y por debajo pasa un escenario 3D (terreno con
+// edificios, rocas y árboles) que avanza hacia ti.
+// En el monitor se ve como una pantalla normal, algo inclinada; en realidad mixta
+// (Meta Quest) es una mesa de juego alargada tumbada sobre tu mesa real: el terreno se
+// apoya en la mesa y las naves vuelan un poco por encima, con su sombra en el suelo.
+// Los bordes se funden en una niebla translúcida que deja ver la habitación.
 //   Monitor: FLECHAS / WASD mover · ESPACIO / Z disparar · ENTER empezar · M sonido
 //   AR: JOYSTICK mover · GATILLO disparar · A / X empezar ·
 //       BOTÓN DE AGARRE mantenido: la mesa de juego sigue al mando y gira con él
-// Coordenadas del juego: unidades con el origen en el centro del plano, y hacia arriba.
+// Coordenadas del juego ("tablero"): x a la derecha, y hacia delante (hacia donde van
+// tus disparos), z hacia fuera del plano (en AR, hacia arriba). Origen en el centro.
 // =====================================================================
 const CFG = {
   W: 9, H: 18,                 // tamaño del plano de juego (unidades): alargado
-  px: .12,                     // tamaño de un píxel de los sprites (unidades)
-  niebla: 1.6,                 // franja superior e inferior donde las cosas se desvanecen
-  nave: { vel: 7, cadencia: .13, radio: .35, vidas: 3, invencible: 2 },
+  altura: 2.4,                 // a cuánto vuelan las naves por encima del terreno
+  niebla: 1.8,                 // franja de los bordes donde todo se desvanece
+  terreno: { largo: 6, ancho: 12, vel: 2.2 },
+  nave: { vel: 7, cadencia: .13, radio: .4, vidas: 3, invencible: 2 },
   bala: { vel: 16 },
   balaEnemiga: { vel: 4.2 },
   oleada: { cada: 3.2, minimo: 1.3, aceleraPorNivel: .25 },
   nivelCada: 25,               // segundos por nivel de dificultad
   premio: { prob: .09, vida: .15 },
-  // metros por unidad (queda de 45 × 90 cm) y centro inicial de la mesa de juego
+  // metros por unidad (la mesa de juego queda de 45 × 90 cm) y centro inicial sobre la mesa real
   ar: { k: .05, centro: new THREE.Vector3(0, .8, -.75) },
 };
-const W = CFG.W, H = CFG.H, TOPE = H / 2, LADO = W / 2;
+const W = CFG.W, H = CFG.H, TOPE = H / 2, LADO = W / 2, SUELO = -CFG.altura;
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const azar = (a, b) => a + Math.random() * (b - a);
+const elegir = a => a[Math.floor(Math.random() * a.length)];
+
+// =====================================================================
+// NIEBLA DE LOS BORDES: se mete en los trozos comunes de los shaders de three, así
+// afecta a todo. Cada punto se pasa a coordenadas del tablero (INV_TAB) y se vuelve
+// translúcido al acercarse a los extremos (en y) o a los lados del terreno (en x).
+// La transparencia sale por el alfa del lienzo, que el passthrough mezcla con la
+// cámara; en los materiales opacos el color va premultiplicado por ese alfa.
+// =====================================================================
+const INV_TAB = { value: new THREE.Matrix4() };
+const BORDES = { value: new THREE.Vector3(TOPE, LADO + 1.5, CFG.niebla) };
+const SIN_BORDES = { value: new THREE.Vector3(1e8, 1e8, 1) };
+THREE.ShaderChunk.common += '\nuniform mat4 INV_TAB;\nuniform vec3 BORDES;\nvarying vec3 vTab;\n';
+THREE.ShaderChunk.project_vertex += `
+  vec4 tabP = vec4(transformed, 1.0);
+  #ifdef USE_INSTANCING
+    tabP = instanceMatrix * tabP;
+  #endif
+  vTab = (INV_TAB * modelMatrix * tabP).xyz;`;
+THREE.ShaderChunk.clipping_planes_fragment += `
+  float borde = min(clamp((BORDES.x - abs(vTab.y)) / BORDES.z, 0.0, 1.0),
+                    clamp((BORDES.y - abs(vTab.x)) / (BORDES.z * 0.6), 0.0, 1.0));
+  if (borde < 0.01) discard;`;
+THREE.ShaderChunk.dithering_fragment += `
+  #ifdef OPAQUE
+    gl_FragColor = vec4(gl_FragColor.rgb * borde, borde);
+  #else
+    gl_FragColor.a *= borde;
+  #endif`;
+THREE.Material.prototype.onBeforeCompile = sh => { sh.uniforms.INV_TAB = INV_TAB; sh.uniforms.BORDES = BORDES; };
 
 // =====================================================================
 // ESCENA
@@ -62,13 +95,14 @@ document.body.appendChild(renderer.domElement);
 const scene = new THREE.Scene();
 const FONDO = new THREE.Color(0x050a1a);
 scene.background = FONDO;
-const camera = new THREE.PerspectiveCamera(50, innerWidth / innerHeight, .05, 100);
+const camera = new THREE.PerspectiveCamera(45, innerWidth / innerHeight, .05, 200);
 function encuadrar() {
   camera.aspect = innerWidth / innerHeight;
-  // que quepa el plano entero, tanto a lo alto como a lo ancho
+  // que quepa el plano entero, mirándolo un poco desde abajo para que se note el relieve
   const t = Math.tan(THREE.MathUtils.degToRad(camera.fov / 2));
-  camera.position.set(0, 0, Math.max((H / 2 + .8) / t, (W / 2 + .8) / (t * camera.aspect)));
-  camera.lookAt(0, 0, 0);
+  const d = Math.max((H / 2 + .5) / t, (W / 2 + 1) / (t * camera.aspect));
+  camera.position.set(0, -d * .3, d * .96);
+  camera.lookAt(0, .3, 0);
   camera.updateProjectionMatrix();
 }
 encuadrar();
@@ -77,77 +111,140 @@ addEventListener('resize', () => { if (!renderer.xr.isPresenting) { renderer.set
 // en AR se tumba (rotation.x) y se orienta con el agarre (rotation.y): primero el giro
 // horizontal y luego la inclinación, de ahí el orden YXZ
 const tablero = new THREE.Group(); tablero.rotation.order = 'YXZ'; scene.add(tablero);
+tablero.add(new THREE.AmbientLight(0xffffff, 1.1));
+const sol = new THREE.DirectionalLight(0xffffff, 2.2); sol.position.set(-3, -4, 10);
+tablero.add(sol, sol.target);
 
-// fondo del plano: oscuro y translúcido con los bordes difuminados (en AR deja ver la habitación)
-function texturaFondo() {
-  const c = document.createElement('canvas'); c.width = 90; c.height = 140; const x = c.getContext('2d');
-  const v = x.createLinearGradient(0, 0, 0, 140);
-  v.addColorStop(0, 'rgba(5,10,26,0)'); v.addColorStop(.12, 'rgba(5,10,26,.55)');
-  v.addColorStop(.88, 'rgba(5,10,26,.55)'); v.addColorStop(1, 'rgba(5,10,26,0)');
-  x.fillStyle = v; x.fillRect(0, 0, 90, 140);
-  x.globalCompositeOperation = 'destination-in';
-  const h = x.createLinearGradient(0, 0, 90, 0);
-  h.addColorStop(0, 'rgba(0,0,0,0)'); h.addColorStop(.08, '#000'); h.addColorStop(.92, '#000'); h.addColorStop(1, 'rgba(0,0,0,0)');
-  x.fillStyle = h; x.fillRect(0, 0, 90, 140);
-  return new THREE.CanvasTexture(c);
+const lambert = (color, extra) => new THREE.MeshLambertMaterial({ color, flatShading: true, ...extra });
+const basico = (color, extra) => new THREE.MeshBasicMaterial({ color, ...extra });
+function pieza(geo, mat, x = 0, y = 0, z = 0, padre) {
+  const m = new THREE.Mesh(geo, mat); m.position.set(x, y, z); padre?.add(m); return m;
 }
-const fondo = new THREE.Mesh(new THREE.PlaneGeometry(W + 1, H + 1),
-  new THREE.MeshBasicMaterial({ map: texturaFondo(), transparent: true, depthWrite: false }));
-fondo.position.z = -.05; fondo.visible = false; tablero.add(fondo);
+function triangulo(pts, grosor) {
+  const s = new THREE.Shape(); s.moveTo(...pts[0]); for (const p of pts.slice(1)) s.lineTo(...p); s.closePath();
+  const g = new THREE.ExtrudeGeometry(s, { depth: grosor, bevelEnabled: false }); g.translate(0, 0, -grosor / 2); return g;
+}
 
-// estrellas en tres capas por detrás del plano (en AR, por debajo de la mesa, como si
-// se mirara por una ventana): al mover la cabeza se nota la profundidad
-const capas = [-1.5, -3.5, -6].map((z, i) => {
-  const n = 40, pos = new Float32Array(n * 3);
-  for (let j = 0; j < n; j++) { pos[j * 3] = azar(-LADO, LADO); pos[j * 3 + 1] = azar(-TOPE, TOPE); pos[j * 3 + 2] = z; }
-  const geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-  const p = new THREE.Points(geo, new THREE.PointsMaterial({ color: [0xffffff, 0x9fd4ff, 0x6f7fb0][i], size: [.09, .07, .06][i], transparent: true, opacity: .85, depthWrite: false }));
-  p.userData.vel = [3, 1.8, 1][i];
-  tablero.add(p); return p;
-});
-function moverEstrellas(dt) {
-  for (const p of capas) {
-    const a = p.geometry.attributes.position;
-    for (let j = 0; j < a.count; j++) {
-      let y = a.getY(j) - p.userData.vel * dt;
-      if (y < -TOPE) { y += H; a.setX(j, azar(-LADO, LADO)); }
-      a.setY(j, y);
+// =====================================================================
+// MODELOS 3D (morro hacia +y, "arriba" de la nave hacia +z)
+// =====================================================================
+function modeloNave() {
+  const g = new THREE.Group();
+  pieza(new THREE.ConeGeometry(.24, 1.3, 6), lambert(0xe8f6ff), 0, .1, 0, g);
+  pieza(triangulo([[0, .35], [.85, -.4], [.3, -.5], [-.3, -.5], [-.85, -.4]], .08), lambert(0x3ff0ff), 0, -.1, -.02, g);
+  const cabina = pieza(new THREE.SphereGeometry(.13, 8, 6), lambert(0x1a86d8, { emissive: 0x0a3a70 }), 0, .2, .13, g);
+  cabina.scale.set(1, 1.8, .8);
+  for (const s of [-1, 1]) pieza(new THREE.BoxGeometry(.05, .35, .3), lambert(0xff3fa8), s * .32, -.35, .14, g);
+  const llama = pieza(new THREE.ConeGeometry(.12, .5, 6), basico(0xff8a3f, { transparent: true, opacity: .9 }), 0, -.8, 0, g);
+  llama.rotation.z = Math.PI;
+  g.userData.llama = llama;
+  return g;
+}
+function modeloCaza() {
+  const g = new THREE.Group();
+  const c = pieza(new THREE.ConeGeometry(.2, 1, 5), lambert(0xff3fa8), 0, 0, 0, g); c.rotation.z = Math.PI;
+  pieza(triangulo([[0, -.2], [.7, .4], [.25, .2], [-.25, .2], [-.7, .4]], .07), lambert(0xa0206a), 0, .05, 0, g);
+  pieza(new THREE.SphereGeometry(.12, 6, 5), lambert(0xffd24a, { emissive: 0x604000 }), 0, .05, .12, g);
+  return g;
+}
+function modeloOnda() {
+  const g = new THREE.Group();
+  const disco = pieza(new THREE.CylinderGeometry(.55, .65, .18, 10), lambert(0x3dff9e), 0, 0, 0, g); disco.rotation.x = Math.PI / 2;
+  pieza(new THREE.SphereGeometry(.3, 10, 6, 0, Math.PI * 2, 0, Math.PI / 2), lambert(0xb8fff0, { transparent: true, opacity: .8 }), 0, 0, .05, g)
+    .rotation.x = Math.PI / 2;
+  for (let i = 0; i < 6; i++) {
+    const a = i / 6 * Math.PI * 2;
+    pieza(new THREE.SphereGeometry(.06, 5, 4), basico(0xffd24a), Math.cos(a) * .5, Math.sin(a) * .5, .02, g);
+  }
+  return g;
+}
+function modeloTorre() {
+  const g = new THREE.Group();
+  const cuerpo = pieza(new THREE.OctahedronGeometry(.6), lambert(0xb86bff), 0, 0, 0, g); cuerpo.scale.z = .6;
+  pieza(new THREE.TorusGeometry(.78, .06, 6, 16), lambert(0xff3fa8), 0, 0, 0, g);
+  pieza(new THREE.CylinderGeometry(.09, .12, .7, 6), lambert(0x6a3aa0), 0, -.55, .1, g);   // cañón hacia -y
+  pieza(new THREE.SphereGeometry(.14, 6, 5), basico(0xffd24a), 0, 0, .32, g);
+  return g;
+}
+const MODELOS = { caza: modeloCaza, onda: modeloOnda, torre: modeloTorre };
+
+// sombra redonda en el terreno: en AR ayuda mucho a ver a qué altura vuela cada nave
+const GEO_SOMBRA = new THREE.CircleGeometry(1, 16);
+const MAT_SOMBRA = basico(0x000000, { transparent: true, opacity: .35, depthWrite: false });
+function sombra(r) { const s = pieza(GEO_SOMBRA, MAT_SOMBRA, 0, 0, SUELO + .02, tablero); s.scale.setScalar(r); return s; }
+
+// balas, premios y chispas comparten geometría y material
+const GEO = {
+  bala: new THREE.CylinderGeometry(.05, .05, .55, 5),
+  balaE: new THREE.SphereGeometry(.15, 8, 6),
+  poder: new THREE.OctahedronGeometry(.32),
+  vida: new THREE.IcosahedronGeometry(.28),
+  chispa: new THREE.BoxGeometry(.13, .13, .13),
+  destello: new THREE.SphereGeometry(1, 10, 8),
+};
+const MAT = {
+  bala: basico(0x9ff8ff), balaE: basico(0xff8a3f),
+  poder: lambert(0xffd24a, { emissive: 0x805000 }), vida: lambert(0xe04030, { emissive: 0x600000 }),
+};
+
+function quitar(o) {
+  tablero.remove(o);
+  // solo se liberan los modelos propios (los compartidos no llevan la marca)
+  if (o.userData.propio) o.traverse(m => { if (m.isMesh) { m.geometry.dispose(); m.material.dispose(); } });
+}
+
+// =====================================================================
+// ESCENARIO 3D: tramos de terreno que avanzan hacia ti y se reciclan al salir
+// =====================================================================
+const GEO_EDIF = new THREE.BoxGeometry(1, 1, 1); GEO_EDIF.translate(0, 0, .5);
+const GEO_ROCA = new THREE.DodecahedronGeometry(1, 0);
+const GEO_PINO = new THREE.ConeGeometry(1, 1, 6); GEO_PINO.rotateX(Math.PI / 2); GEO_PINO.translate(0, 0, .5);
+const MAT_TER = {
+  suelo: lambert(0x33403a), suelo2: lambert(0x2c3850),
+  edif: [lambert(0x8a93b0), lambert(0x6a7390), lambert(0xa8a0c0)], techo: basico(0xffd24a),
+  roca: lambert(0x7a6a5a), pino: lambert(0x2f8a4a), tronco: lambert(0x5a3a28), agua: lambert(0x2a6ab0, { emissive: 0x0a2040 }),
+};
+const tramos = [];
+function llenarTramo(t) {
+  for (const c of [...t.children]) if (c.userData.adorno) t.remove(c);
+  const L = CFG.terreno.largo, A = CFG.terreno.ancho, adorno = o => { o.userData.adorno = true; t.add(o); return o; };
+  const tipo = elegir(['ciudad', 'bosque', 'rocas', 'rio']);
+  t.userData.suelo.material = tipo === 'ciudad' ? MAT_TER.suelo2 : MAT_TER.suelo;
+  if (tipo === 'rio') {                               // un río que cruza de lado a lado
+    const r = adorno(pieza(new THREE.PlaneGeometry(A, azar(.8, 1.6)), MAT_TER.agua, 0, azar(-1.5, 1.5), .03));
+    r.rotation.z = azar(-.3, .3);
+  }
+  const n = tipo === 'ciudad' ? 9 : tipo === 'rio' ? 5 : 8;
+  for (let i = 0; i < n; i++) {
+    const x = azar(-A / 2 + .5, A / 2 - .5), y = azar(-L / 2 + .4, L / 2 - .4);
+    const clase = tipo === 'ciudad' ? (Math.random() < .8 ? 'edif' : 'pino') : tipo === 'bosque' ? (Math.random() < .85 ? 'pino' : 'roca') : elegir(['roca', 'roca', 'pino']);
+    if (clase === 'edif') {
+      const e = adorno(pieza(GEO_EDIF, elegir(MAT_TER.edif), x, y, 0)); e.scale.set(azar(.6, 1.3), azar(.6, 1.3), azar(.5, 1.9));
+      const luz = adorno(pieza(GEO_EDIF, MAT_TER.techo, x, y, e.scale.z)); luz.scale.set(e.scale.x * .5, e.scale.y * .5, .04);
+    } else if (clase === 'pino') {
+      const s = azar(.3, .5), h = azar(.9, 1.5);
+      adorno(pieza(GEO_EDIF, MAT_TER.tronco, x, y, 0)).scale.set(.1, .1, .3);
+      adorno(pieza(GEO_PINO, MAT_TER.pino, x, y, .25)).scale.set(s, s, h);
+    } else {
+      const r = adorno(pieza(GEO_ROCA, MAT_TER.roca, x, y, 0)); r.scale.set(azar(.25, .6), azar(.25, .6), azar(.2, .45));
+      r.rotation.set(azar(0, 3), azar(0, 3), azar(0, 3));
     }
-    a.needsUpdate = true;
   }
 }
-
-// --- sprites de píxeles dibujados desde texto ---
-const PAL = { c: '#3ff0ff', b: '#1a86d8', w: '#ffffff', r: '#ff8a3f', y: '#ffd24a', m: '#ff3fa8', g: '#3dff9e', p: '#b86bff', o: '#ff5a3f', k: '#e04030' };
-function sprite(rows) {
-  const c = document.createElement('canvas'); c.width = rows[0].length; c.height = rows.length; const x = c.getContext('2d');
-  rows.forEach((r, y) => [...r].forEach((ch, i) => { if (PAL[ch]) { x.fillStyle = PAL[ch]; x.fillRect(i, y, 1, 1); } }));
-  const t = new THREE.CanvasTexture(c);
-  t.magFilter = t.minFilter = THREE.NearestFilter; t.generateMipmaps = false; t.colorSpace = THREE.SRGBColorSpace;
-  return { t, w: c.width * CFG.px, h: c.height * CFG.px };
+{
+  const L = CFG.terreno.largo, n = Math.ceil(H / L) + 1;
+  for (let i = 0; i < n; i++) {
+    const t = new THREE.Group(); t.position.set(0, -TOPE + L / 2 + i * L, SUELO);
+    t.userData.suelo = pieza(new THREE.PlaneGeometry(CFG.terreno.ancho, L), MAT_TER.suelo, 0, 0, 0, t);
+    llenarTramo(t); tablero.add(t); tramos.push(t);
+  }
 }
-const SPR = {
-  nave:  sprite(['....c....', '...cwc...', '...cbc...', '..ccbcc..', '.cccbccc.', 'ccwcccwcc', 'cc.ccc.cc', 'c..r.r..c']),
-  nave2: sprite(['....c....', '...cwc...', '...cbc...', '..ccbcc..', '.cccbccc.', 'ccwcccwcc', 'cc.ccc.cc', 'c..y.y..c']),
-  caza:  sprite(['m.......m', 'mm.mmm.mm', '.mmmwmmm.', '..mmmmm..', '...mym...', '....m....']),
-  onda:  sprite(['..ggggg..', '.gwgwgwg.', 'ggggggggg', '.g.g.g.g.']),
-  torre: sprite(['...ppppp...', '..ppwwwpp..', '.ppppppppp.', 'pp.ppypp.pp', 'p..ppppp..p', '....ppp....', '.....p.....']),
-  bala:  sprite(['w', 'c', 'c']),
-  balaE: sprite(['.o.', 'oyo', '.o.']),
-  poder: sprite(['..y..', '.yry.', 'yrwry', '.yry.', '..y..']),
-  vida:  sprite(['.kk.kk.', 'kwkkkkk', 'kkkkkkk', '.kkkkk.', '..kkk..', '...k...']),
-  chispa: sprite(['w']),
-};
-function crear(s, x, y, escala = 1) {
-  const m = new THREE.Mesh(new THREE.PlaneGeometry(s.w * escala, s.h * escala),
-    new THREE.MeshBasicMaterial({ map: s.t, transparent: true, depthWrite: false }));
-  m.position.set(x, y, 0); tablero.add(m); return m;
-}
-function quitar(m) { tablero.remove(m); m.geometry.dispose(); m.material.dispose(); }
-// franjas de niebla arriba y abajo: lo que entra o sale del plano aparece y se va poco a poco
-function colocar(m, x, y) {
-  m.position.x = x; m.position.y = y;
-  m.material.opacity = clamp(Math.min(TOPE - y, y + TOPE) / CFG.niebla, 0, 1);
+function moverTerreno(dt) {
+  const L = CFG.terreno.largo;
+  for (const t of tramos) {
+    t.position.y -= CFG.terreno.vel * dt;
+    if (t.position.y < -TOPE - L / 2) { t.position.y += tramos.length * L; llenarTramo(t); }
+  }
 }
 
 // =====================================================================
@@ -214,12 +311,16 @@ const SND = (() => {
 // =====================================================================
 let estado = 'titulo', tiempo = 0, puntos = 0, record = 0;
 try { record = +localStorage.getItem('naves-ar-record') || 0; } catch {}
-let nave, balas = [], enemigos = [], balasE = [], premios = [], chispas = [], proxOleada = 0, fuego = 0;
+let nave = null, balas = [], enemigos = [], balasE = [], premios = [], chispas = [], proxOleada = 0, fuego = 0;
 
 function nuevaPartida() {
-  for (const lista of [balas, enemigos, balasE, premios, chispas]) { lista.forEach(o => quitar(o.m)); lista.length = 0; }
-  if (nave) quitar(nave.m);
-  nave = { x: 0, y: -TOPE + 1.8, vidas: CFG.nave.vidas, poder: 1, inv: 1, m: crear(SPR.nave, 0, -TOPE + 1.8) };
+  for (const lista of [balas, enemigos, balasE, premios, chispas]) {
+    for (const o of lista) { quitar(o.m); if (o.sombra) tablero.remove(o.sombra); }
+    lista.length = 0;
+  }
+  if (nave) { quitar(nave.m); tablero.remove(nave.sombra); }
+  const m = modeloNave(); m.userData.propio = true; tablero.add(m);
+  nave = { x: 0, y: -TOPE + 2.2, vidas: CFG.nave.vidas, poder: 1, inv: 1, m, sombra: sombra(.6) };
   tiempo = 0; puntos = 0; proxOleada = 1.5; fuego = 0;
   estado = 'juego'; SND.inicio();
 }
@@ -227,36 +328,41 @@ const nivel = () => 1 + Math.floor(tiempo / CFG.nivelCada);
 
 // --- oleadas ---
 const TIPOS = {
-  caza:  { spr: SPR.caza,  vida: 1, radio: .5, puntos: 100 },
-  onda:  { spr: SPR.onda,  vida: 1, radio: .5, puntos: 150 },
-  torre: { spr: SPR.torre, vida: 5, radio: .65, puntos: 500 },
+  caza:  { vida: 1, radio: .55, puntos: 100, color: 0xff3fa8 },
+  onda:  { vida: 1, radio: .6,  puntos: 150, color: 0x3dff9e },
+  torre: { vida: 5, radio: .75, puntos: 500, color: 0xb86bff },
 };
 function enemigo(tipo, x, y, extra) {
-  const T = TIPOS[tipo];
-  enemigos.push({ tipo, x, y, vida: T.vida + Math.floor(nivel() / 3) * (tipo === 'torre' ? 2 : 0), t: 0, flash: 0, ...extra, m: crear(T.spr, x, y) });
+  const m = MODELOS[tipo](); m.userData.propio = true; m.position.set(x, y, 0); tablero.add(m);
+  const mats = []; m.traverse(o => { if (o.isMesh && o.material.emissive) mats.push(o.material); });
+  enemigos.push({ tipo, x, y, vida: TIPOS[tipo].vida + (tipo === 'torre' ? Math.floor(nivel() / 3) * 2 : 0),
+    t: 0, flash: 0, ...extra, m, mats, sombra: sombra(TIPOS[tipo].radio) });
 }
 function oleada() {
   const n = nivel(), v = 1 + (n - 1) * .12, y0 = TOPE + 1;
   const r = Math.random();
   if (r < .4) {                                    // V de cazas en picado
     const cx = azar(-2, 2);
-    for (let i = -2; i <= 2; i++) enemigo('caza', cx + i * 1.1, y0 + Math.abs(i) * .9, { vy: -3.2 * v, vx: 0 });
+    for (let i = -2; i <= 2; i++) enemigo('caza', cx + i * 1.1, y0 + Math.abs(i) * .9, { vy: -3.2 * v });
   } else if (r < .75) {                            // fila de ovnis ondulando
     const cx = azar(-1.5, 1.5), lado = Math.random() < .5 ? 1 : -1;
     for (let i = 0; i < 6; i++) enemigo('onda', cx, y0 + i * 1.1, { vy: -2.4 * v, cx, amp: 2.2, fase: i * .6, lado });
   } else {                                         // torretas que bajan, se paran y disparan
     const k = n >= 3 && Math.random() < .5 ? 2 : 1;
-    for (let i = 0; i < k; i++) enemigo('torre', k === 1 ? azar(-2.5, 2.5) : (i ? 2.2 : -2.2), y0, { vy: -2, parar: azar(1.5, 3.5), cadencia: 1.3 / v });
+    for (let i = 0; i < k; i++) enemigo('torre', k === 1 ? azar(-2.5, 2.5) : (i ? 2.2 : -2.2), y0, { vy: -2, parar: azar(2, 5), cadencia: 1.3 / v });
   }
 }
 
+// --- explosiones: chispas 3D que saltan en todas direcciones y un destello que se abre ---
 function explotar(x, y, color, n = 10, grande = false) {
+  const mat = basico(color);
   for (let i = 0; i < n; i++) {
-    const a = Math.random() * 6.28, s = azar(1.5, grande ? 7 : 4.5);
-    const m = crear(SPR.chispa, x, y, azar(1, grande ? 2.2 : 1.6));
-    m.material.color.set(color);
-    chispas.push({ x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, vida: azar(.3, grande ? .9 : .5), m });
+    const a = Math.random() * 6.28, s = azar(1.5, grande ? 7 : 4.5), m = pieza(GEO.chispa, mat, x, y, 0, tablero);
+    chispas.push({ vx: Math.cos(a) * s, vy: Math.sin(a) * s, vz: azar(-3, 4), gira: azar(5, 15), vida: azar(.35, grande ? 1 : .6), m, max: 0 });
   }
+  const f = pieza(GEO.destello, basico(0xfff0c0, { transparent: true, opacity: .8, depthWrite: false }), x, y, 0, tablero);
+  f.userData.propio = true;
+  chispas.push({ vx: 0, vy: 0, vz: 0, gira: 0, vida: .25, m: f, destello: grande ? 1.6 : 1 });
   SND.explosion(grande);
 }
 function herir() {
@@ -264,7 +370,7 @@ function herir() {
   nave.vidas--; nave.poder = Math.max(1, nave.poder - 1); nave.inv = CFG.nave.invencible;
   explotar(nave.x, nave.y, 0x3ff0ff, 22, true); SND.herido();
   if (nave.vidas <= 0) {
-    estado = 'fin'; nave.m.visible = false; SND.fin();
+    estado = 'fin'; nave.m.visible = nave.sombra.visible = false; SND.fin();
     if (puntos > record) { record = puntos; try { localStorage.setItem('naves-ar-record', record); } catch {} }
   }
 }
@@ -282,7 +388,7 @@ addEventListener('keydown', e => {
 addEventListener('keyup', e => { teclas[e.key.toLowerCase()] = false; });
 addEventListener('pointerdown', () => SND.init());
 const mando = { x: 0, y: 0, fuego: false, empezar: false };
-const EJE_Y = new THREE.Vector3(0, 1, 0), tmp = new THREE.Vector3(), tmpQ = new THREE.Quaternion();
+const tmp = new THREE.Vector3(), tmpQ = new THREE.Quaternion();
 let empezarAntes = false;
 function leerMandos(frame) {
   mando.x = mando.y = 0; mando.fuego = mando.empezar = false;
@@ -319,41 +425,61 @@ function entrada() {
 // ACTUALIZACIÓN
 // =====================================================================
 const toca = (a, b, r) => Math.hypot(a.x - b.x, a.y - b.y) < r;
+function ponerSombra(o) { o.sombra.position.x = o.x; o.sombra.position.y = o.y; }
 function actualizar(dt) {
-  moverEstrellas(dt);
-  for (const c of chispas) { c.x += c.vx * dt; c.y += c.vy * dt; c.vx *= .96; c.vy *= .96; c.vida -= dt; colocar(c.m, c.x, c.y); c.m.material.opacity *= clamp(c.vida * 3, 0, 1); }
-  for (const c of chispas) if (c.vida <= 0) quitar(c.m);
+  moverTerreno(dt);
+  for (const c of chispas) {
+    c.vida -= dt;
+    if (c.destello) { c.m.scale.setScalar(c.destello * (1 - c.vida / .25 * .7)); c.m.material.opacity = c.vida / .25 * .8; continue; }
+    c.m.position.x += c.vx * dt; c.m.position.y += c.vy * dt; c.m.position.z += c.vz * dt;
+    c.vx *= .95; c.vy *= .95; c.vz -= 6 * dt;
+    c.m.rotation.x += c.gira * dt; c.m.rotation.y += c.gira * dt;
+    c.m.scale.setScalar(clamp(c.vida * 3, 0, 1));
+  }
+  // se quita el material compartido de un grupo de chispas solo cuando ya no queda ninguna
+  const vivas = new Set(chispas.filter(c => c.vida > 0).map(c => c.m.material));
+  for (const c of chispas) if (c.vida <= 0) {
+    tablero.remove(c.m);
+    if (c.destello) c.m.material.dispose(); else if (!vivas.has(c.m.material)) c.m.material.dispose();
+  }
   chispas = chispas.filter(c => c.vida > 0);
+
   const inp = entrada();
   if (estado !== 'juego') { if (inp.empezar) nuevaPartida(); return; }
-
   tiempo += dt;
-  // --- nave ---
-  nave.x = clamp(nave.x + inp.x * CFG.nave.vel * dt, -LADO + .5, LADO - .5);
-  nave.y = clamp(nave.y + inp.y * CFG.nave.vel * dt, -TOPE + .8, TOPE - 2.5);
+
+  // --- nave: se inclina hacia donde se mueve ---
+  nave.x = clamp(nave.x + inp.x * CFG.nave.vel * dt, -LADO + .6, LADO - .6);
+  nave.y = clamp(nave.y + inp.y * CFG.nave.vel * dt, -TOPE + 1, TOPE - 3);
   nave.inv -= dt;
   nave.m.position.set(nave.x, nave.y, 0);
+  nave.m.rotation.y += (inp.x * .6 - nave.m.rotation.y) * Math.min(1, dt * 10);
+  nave.m.rotation.x += (-inp.y * .25 - nave.m.rotation.x) * Math.min(1, dt * 10);
   nave.m.visible = !(nave.inv > 0 && Math.floor(nave.inv * 12) % 2);
-  nave.m.material.map = Math.floor(tiempo * 16) % 2 ? SPR.nave.t : SPR.nave2.t;   // la llama del motor parpadea
+  nave.m.userData.llama.scale.set(1, .7 + Math.random() * .5 + inp.y * .4, 1);
+  ponerSombra(nave);
   fuego -= dt;
   if (inp.fuego && fuego <= 0) {
     fuego = CFG.nave.cadencia;
-    const salidas = nave.poder === 1 ? [[0, 0]] : nave.poder === 2 ? [[-.3, 0], [.3, 0]] : [[-.35, -.18], [0, 0], [.35, .18]];
-    for (const [dx, vx] of salidas) balas.push({ x: nave.x + dx, y: nave.y + .5, vx: vx * CFG.bala.vel, m: crear(SPR.bala, nave.x + dx, nave.y + .5) });
+    const salidas = nave.poder === 1 ? [[0, 0]] : nave.poder === 2 ? [[-.3, 0], [.3, 0]] : [[-.4, -.18], [0, 0], [.4, .18]];
+    for (const [dx, vx] of salidas) {
+      const m = pieza(GEO.bala, MAT.bala, nave.x + dx, nave.y + .7, 0, tablero); m.rotation.z = -Math.atan2(vx, 1);
+      balas.push({ x: nave.x + dx, y: nave.y + .7, vx: vx * CFG.bala.vel, m });
+    }
     SND.disparo();
   }
   // --- balas propias ---
   for (const b of balas) {
-    b.x += b.vx * dt; b.y += CFG.bala.vel * dt; colocar(b.m, b.x, b.y);
+    b.x += b.vx * dt; b.y += CFG.bala.vel * dt; b.m.position.set(b.x, b.y, 0);
     for (const e of enemigos) {
       if (e.muerto || !toca(b, e, TIPOS[e.tipo].radio)) continue;
       b.muerta = true; e.vida--; e.flash = .08; SND.impacto();
       if (e.vida <= 0) {
         e.muerto = true; puntos += TIPOS[e.tipo].puntos;
-        explotar(e.x, e.y, { caza: 0xff3fa8, onda: 0x3dff9e, torre: 0xb86bff }[e.tipo], e.tipo === 'torre' ? 24 : 12, e.tipo === 'torre');
+        explotar(e.x, e.y, TIPOS[e.tipo].color, e.tipo === 'torre' ? 24 : 12, e.tipo === 'torre');
         if (Math.random() < (e.tipo === 'torre' ? .6 : CFG.premio.prob)) {
-          const vida = Math.random() < CFG.premio.vida && nave.vidas < 5;
-          premios.push({ tipo: vida ? 'vida' : 'poder', x: e.x, y: e.y, t: 0, m: crear(vida ? SPR.vida : SPR.poder, e.x, e.y) });
+          const tipo = Math.random() < CFG.premio.vida && nave.vidas < 5 ? 'vida' : 'poder';
+          premios.push({ tipo, x: e.x, y: e.y, t: 0, m: pieza(GEO[tipo], MAT[tipo], e.x, e.y, 0, tablero) });
         }
       }
       break;
@@ -367,42 +493,48 @@ function actualizar(dt) {
   for (const e of enemigos) {
     if (e.muerto) continue;
     e.t += dt; e.flash -= dt;
-    if (e.tipo === 'caza') { e.y += e.vy * dt; e.vy -= 1.5 * dt; }
-    else if (e.tipo === 'onda') { e.y += e.vy * dt; e.x = e.cx + Math.sin(e.t * 2.4 + e.fase) * e.amp * e.lado; }
-    else {
+    if (e.tipo === 'caza') {
+      e.y += e.vy * dt; e.vy -= 1.5 * dt;
+      e.m.rotation.y = Math.sin(e.t * 5) * .3;                   // se balancea al caer en picado
+    } else if (e.tipo === 'onda') {
+      e.y += e.vy * dt; e.x = e.cx + Math.sin(e.t * 2.4 + e.fase) * e.amp * e.lado;
+      e.m.rotation.z += dt * 3;
+    } else {
       if (e.t < 6 && e.y > e.parar) e.y += e.vy * dt;
-      else if (e.t >= 6) e.y -= e.vy * 1.3 * dt;              // se retira por arriba
+      else if (e.t >= 6) e.y -= e.vy * 1.3 * dt;              // se retira por el fondo
+      const dx = nave.x - e.x, dy = nave.y - e.y, d = Math.hypot(dx, dy) || 1;
+      e.m.rotation.z = Math.atan2(dx, -dy);                     // el cañón apunta a tu nave
       e.dispara = (e.dispara ?? 1) - dt;
       if (e.dispara <= 0 && e.t < 6 && e.y < TOPE - .5) {
         e.dispara = e.cadencia;
-        const dx = nave.x - e.x, dy = nave.y - e.y, d = Math.hypot(dx, dy) || 1;
         for (const giro of nivel() >= 2 ? [-.25, 0, .25] : [0]) {
           const c = Math.cos(giro), s = Math.sin(giro), vx = (dx * c - dy * s) / d, vy = (dx * s + dy * c) / d;
-          balasE.push({ x: e.x, y: e.y - .4, vx: vx * CFG.balaEnemiga.vel, vy: vy * CFG.balaEnemiga.vel, m: crear(SPR.balaE, e.x, e.y - .4) });
+          balasE.push({ x: e.x + vx * .8, y: e.y + vy * .8, vx: vx * CFG.balaEnemiga.vel, vy: vy * CFG.balaEnemiga.vel,
+            m: pieza(GEO.balaE, MAT.balaE, e.x, e.y, 0, tablero) });
         }
         SND.enemigoDispara();
       }
     }
-    colocar(e.m, e.x, e.y);
-    e.m.material.color.setScalar(e.flash > 0 ? 3 : 1);
+    e.m.position.set(e.x, e.y, 0); ponerSombra(e);
+    for (const m of e.mats) m.emissive.setHex(e.flash > 0 ? 0xffffff : m.userData.emisivo ??= m.emissive.getHex());
     if (toca(e, nave, TIPOS[e.tipo].radio + CFG.nave.radio) && nave.inv <= 0) {
       if (e.tipo !== 'torre') { e.muerto = true; explotar(e.x, e.y, 0xff8a3f, 10); }
       herir();
     }
     if (e.y < -TOPE - 1.5 || e.y > TOPE + 3 || Math.abs(e.x) > LADO + 3) e.muerto = true;
   }
-  enemigos = enemigos.filter(e => { if (e.muerto) quitar(e.m); return !e.muerto; });
+  enemigos = enemigos.filter(e => { if (e.muerto) { quitar(e.m); tablero.remove(e.sombra); } return !e.muerto; });
   // --- balas enemigas ---
   for (const b of balasE) {
-    b.x += b.vx * dt; b.y += b.vy * dt; colocar(b.m, b.x, b.y);
+    b.x += b.vx * dt; b.y += b.vy * dt; b.m.position.set(b.x, b.y, 0);
     if (estado === 'juego' && toca(b, nave, CFG.nave.radio + .12) && nave.inv <= 0) { b.muerta = true; herir(); }
     if (Math.abs(b.x) > LADO + .5 || Math.abs(b.y) > TOPE + .5) b.muerta = true;
   }
   balasE = balasE.filter(b => { if (b.muerta) quitar(b.m); return !b.muerta; });
-  // --- premios ---
+  // --- premios: giran y bajan despacio ---
   for (const p of premios) {
-    p.t += dt; p.y -= 1.6 * dt; colocar(p.m, p.x, p.y);
-    p.m.rotation.z = Math.sin(p.t * 4) * .4;
+    p.t += dt; p.y -= 1.6 * dt; p.m.position.set(p.x, p.y, Math.sin(p.t * 4) * .15);
+    p.m.rotation.z += dt * 3; p.m.rotation.x += dt * 2;
     if (toca(p, nave, .8) && estado === 'juego') {
       p.cogido = true; SND.premio();
       if (p.tipo === 'vida') nave.vidas++; else if (nave.poder < 3) nave.poder++; else puntos += 1000;
@@ -413,13 +545,15 @@ function actualizar(dt) {
 
 // =====================================================================
 // HUD: un lienzo transparente del tamaño del plano, delante de todo
-// =====================================================================
 // (en AR se levanta y queda de pie sobre el extremo lejano de la mesa)
+// =====================================================================
 const HC = document.createElement('canvas'); HC.width = 360; HC.height = 720;
 const hg = HC.getContext('2d');
 const hudTex = new THREE.CanvasTexture(HC); hudTex.colorSpace = THREE.SRGBColorSpace;
 const hud = new THREE.Mesh(new THREE.PlaneGeometry(W, H), new THREE.MeshBasicMaterial({ map: hudTex, transparent: true, depthTest: false, depthWrite: false }));
-hud.position.z = .1; hud.renderOrder = 10; tablero.add(hud);
+hud.material.onBeforeCompile = sh => { sh.uniforms.INV_TAB = INV_TAB; sh.uniforms.BORDES = SIN_BORDES; };   // el HUD no se difumina
+hud.material.customProgramCacheKey = () => 'hud';
+hud.position.z = 1; hud.renderOrder = 10; tablero.add(hud);
 let hudAntes = '';
 function texto(s, x, y, tam, col, alin = 'left') {
   hg.font = `${tam}px "Press Start 2P"`; hg.textAlign = alin; hg.textBaseline = 'top';
@@ -432,11 +566,13 @@ function pintarHud() {
   hudAntes = clave;
   hg.clearRect(0, 0, 360, 720);
   const ar = renderer.xr.isPresenting;
-  texto(String(puntos).padStart(6, '0'), 14, 14, 14, '#ffffff');
-  texto('HI ' + String(record).padStart(6, '0'), 346, 14, 10, '#ffd24a', 'right');
+  // en AR el panel está de pie sobre la mesa: el marcador va abajo, pegado a la mesa
+  const y0 = ar ? 650 : 14;
+  texto(String(puntos).padStart(6, '0'), 14, y0, 14, '#ffffff');
+  texto('HI ' + String(record).padStart(6, '0'), 346, y0, 10, '#ffd24a', 'right');
   if (nave) {
-    for (let i = 0; i < nave.vidas; i++) texto('♥', 14 + i * 18, 36, 12, '#e04030');
-    texto('P' + nave.poder, 346, 32, 10, '#3ff0ff', 'right');
+    for (let i = 0; i < nave.vidas; i++) texto('♥', 14 + i * 18, y0 + 22, 12, '#e04030');
+    texto('P' + nave.poder, 346, y0 + 18, 10, '#3ff0ff', 'right');
   }
   if (estado === 'titulo') {
     texto('NAVES', 180, 270, 36, '#3ff0ff', 'center');
@@ -457,16 +593,17 @@ function pintarHud() {
 // REALIDAD MIXTA
 // =====================================================================
 renderer.xr.addEventListener('sessionstart', () => {
-  scene.background = null; fondo.visible = true;
+  scene.background = null;
   tablero.scale.setScalar(CFG.ar.k);
-  tablero.rotation.x = -Math.PI / 2;                     // tumbada: "arriba" del juego = hacia el fondo
-  hud.position.set(0, TOPE, H / 2); hud.rotation.x = Math.PI / 2;   // marcador de pie al fondo
+  tablero.rotation.x = -Math.PI / 2;                     // tumbada: "adelante" del juego = hacia el fondo
+  // marcador de pie al fondo, a media escala (27 × 54 cm) y con su borde inferior en la mesa
+  hud.scale.setScalar(.6); hud.position.set(0, TOPE, SUELO + H * .6 / 2); hud.rotation.x = Math.PI / 2;
   arBtn.textContent = 'SALIR DE AR';
 });
 renderer.xr.addEventListener('sessionend', () => {
-  scene.background = FONDO; fondo.visible = false;
+  scene.background = FONDO;
   tablero.scale.setScalar(1); tablero.position.set(0, 0, 0); tablero.rotation.set(0, 0, 0);
-  hud.position.set(0, 0, .1); hud.rotation.x = 0;
+  hud.scale.setScalar(1); hud.position.set(0, 0, 1); hud.rotation.x = 0;
   arBtn.textContent = 'ENTRAR EN AR';
   renderer.setSize(innerWidth, innerHeight); encuadrar();
 });
@@ -480,13 +617,18 @@ arBtn.onclick = () => {
 };
 
 // =====================================================================
+const arriba = new THREE.Vector3();
 let ultimo = performance.now();
 function bucle(ahora, frame) {
   const dt = Math.min(.033, (ahora - ultimo) / 1000); ultimo = ahora;
-  leerMandos(renderer.xr.isPresenting ? frame : null);
-  if (renderer.xr.isPresenting) tablero.position.copy(CFG.ar.centro);
+  const ar = renderer.xr.isPresenting;
+  leerMandos(ar ? frame : null);
+  // en AR el terreno se apoya en la mesa real: el plano de las naves queda "altura" por encima
+  if (ar) tablero.position.copy(CFG.ar.centro).add(arriba.set(0, CFG.altura * CFG.ar.k, 0));
   actualizar(dt);
   pintarHud();
+  tablero.updateMatrixWorld();
+  INV_TAB.value.copy(tablero.matrixWorld).invert();
   renderer.render(scene, camera);
 }
 document.fonts.load('12px "Press Start 2P"').finally(() => renderer.setAnimationLoop(bucle));
