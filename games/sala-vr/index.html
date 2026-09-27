@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sala VR</title>
+<script src="https://cdn.jsdelivr.net/npm/aframe@1.7.0/dist/aframe-master.min.js"></script>
+<script>
+// Objetos que se pueden coger con los mandos (botón de agarre) o con las manos (pellizco).
+// Al soltarlos caen con gravedad, rebotan un poco y se pueden lanzar.
+const GRAB_DIST = 0.18;
+const FLOOR = 0;
+const ROOM = 3.8;       // media anchura de la sala (paredes)
+const TABLE = { x: 0, z: -1.2, w: 1.6, d: 0.9, top: 0.78 };
+
+AFRAME.registerComponent('agarrable', {
+  init() {
+    this.el.classList.add('agarrable');
+    this.vel = new THREE.Vector3();
+    this.holder = null;
+    this.size = this.el.getAttribute('data-size') ? parseFloat(this.el.getAttribute('data-size')) : 0.06;
+  },
+  tick(t, dt) {
+    if (this.holder || !dt) return;
+    const s = Math.min(dt / 1000, 0.05);
+    const p = this.el.object3D.position;
+    this.vel.y -= 9.8 * s;
+    p.addScaledVector(this.vel, s);
+    // suelo o mesa
+    const onTable = Math.abs(p.x - TABLE.x) < TABLE.w / 2 && Math.abs(p.z - TABLE.z) < TABLE.d / 2;
+    const ground = (onTable && p.y > TABLE.top - 0.1 ? TABLE.top : FLOOR) + this.size;
+    if (p.y < ground) {
+      p.y = ground;
+      this.vel.y = Math.abs(this.vel.y) > 0.6 ? -this.vel.y * 0.35 : 0;
+      this.vel.x *= 0.8; this.vel.z *= 0.8;
+    }
+    // paredes
+    for (const k of ['x', 'z']) {
+      if (Math.abs(p[k]) > ROOM - this.size) { p[k] = Math.sign(p[k]) * (ROOM - this.size); this.vel[k] *= -0.4; }
+    }
+  }
+});
+
+AFRAME.registerComponent('agarrador', {
+  init() {
+    this.held = null;
+    this.prev = new THREE.Vector3();
+    this.velocity = new THREE.Vector3();
+    this.tmp = new THREE.Vector3();
+    const down = () => this.grab();
+    const up = () => this.release();
+    for (const ev of ['gripdown', 'triggerdown', 'pinchstarted']) this.el.addEventListener(ev, down);
+    for (const ev of ['gripup', 'triggerup', 'pinchended']) this.el.addEventListener(ev, up);
+  },
+  grab() {
+    if (this.held) return;
+    const hand = this.el.object3D.getWorldPosition(new THREE.Vector3());
+    let best = null, bestD = GRAB_DIST;
+    for (const el of document.querySelectorAll('.agarrable')) {
+      const c = el.components.agarrable;
+      if (c.holder) continue;
+      const d = el.object3D.getWorldPosition(this.tmp).distanceTo(hand) - c.size;
+      if (d < bestD) { bestD = d; best = el; }
+    }
+    if (!best) return;
+    this.held = best;
+    best.components.agarrable.holder = this.el;
+    this.el.object3D.attach(best.object3D);   // conserva la posición relativa
+    best.setAttribute('material', 'emissive', '#333');
+    this.prev.copy(hand);
+  },
+  release() {
+    if (!this.held) return;
+    const el = this.held;
+    el.sceneEl.object3D.attach(el.object3D);
+    el.components.agarrable.holder = null;
+    el.components.agarrable.vel.copy(this.velocity);
+    el.setAttribute('material', 'emissive', '#000');
+    this.held = null;
+  },
+  tick(t, dt) {
+    if (!dt) return;
+    const now = this.el.object3D.getWorldPosition(this.tmp);
+    const v = now.clone().sub(this.prev).multiplyScalar(1000 / dt);
+    this.velocity.lerp(v, 0.5);   // suaviza para que el lanzamiento no sea brusco
+    this.prev.copy(now);
+  }
+});
+
+// Para probar en el monitor: el ratón se captura al hacer clic (Esc para soltarlo).
+// Clic izquierdo coge/suelta lo que haya en el centro de la pantalla; clic derecho lo lanza.
+AFRAME.registerComponent('raton-agarre', {
+  init() {
+    this.held = null;
+    this.ray = new THREE.Raycaster();
+    this.ray.far = 3;
+    const canvas = () => this.el.sceneEl.canvas;
+    this.el.sceneEl.addEventListener('contextmenu', e => e.preventDefault());
+    window.addEventListener('mousedown', e => {
+      if (this.el.sceneEl.is('vr-mode') || document.pointerLockElement !== canvas()) return;
+      if (this.held) this.release(e.button === 2 ? 6 : 0);
+      else if (e.button === 0) this.grab();
+    });
+  },
+  grab() {
+    const cam = this.el.object3D;
+    this.ray.setFromCamera({ x: 0, y: 0 }, this.el.getObject3D('camera'));
+    const objs = [...document.querySelectorAll('.agarrable')].map(el => el.object3D);
+    const hit = this.ray.intersectObjects(objs, true)[0];
+    if (!hit) return;
+    let o = hit.object;
+    while (o && !o.el?.components?.agarrable) o = o.parent;
+    if (!o) return;
+    o = o.el.object3D;   // la malla también lleva .el: mover la entidad, no solo la malla
+    this.held = o.el;
+    o.el.components.agarrable.holder = this.el;
+    cam.attach(o);
+    o.position.set(0.15, -0.15, -0.5);
+    o.el.setAttribute('material', 'emissive', '#333');
+  },
+  release(speed) {
+    const el = this.held;
+    el.sceneEl.object3D.attach(el.object3D);
+    const g = el.components.agarrable;
+    g.holder = null;
+    this.el.object3D.getWorldDirection(g.vel).multiplyScalar(-speed);
+    g.vel.y += speed * 0.3;
+    el.setAttribute('material', 'emissive', '#000');
+    this.held = null;
+  }
+});
+</script>
+<style>
+  .back { position: fixed; top: 12px; left: 12px; z-index: 10; color: #fff; background: rgba(0,0,0,.5);
+          padding: 8px 12px; border-radius: 8px; font: 14px system-ui, sans-serif; text-decoration: none; }
+</style>
+</head>
+<body>
+<a class="back" href="../../index.html">← Arcade</a>
+<script>
+  // En VR la mira sobra: se oculta al entrar y vuelve al salir.
+  document.addEventListener('DOMContentLoaded', () => {
+    const s = document.querySelector('a-scene');
+    const mira = v => document.querySelector('.mira').setAttribute('visible', v);
+    s.addEventListener('enter-vr', () => mira(false));
+    s.addEventListener('exit-vr', () => mira(true));
+  });
+</script>
+<a-scene renderer="antialias: true; colorManagement: true" xr-mode-ui="enabled: true" background="color: #1c2230">
+
+  <!-- Jugador: cámara + mandos + manos -->
+  <a-entity id="rig" position="0 0 0.6">
+    <a-entity camera look-controls="pointerLockEnabled: true" wasd-controls raton-agarre position="0 1.6 0">
+      <!-- punto de mira (solo en el monitor) -->
+      <a-ring class="mira" radius-inner="0.004" radius-outer="0.007" position="0 0 -0.5"
+              material="shader: flat; color: #fff; opacity: 0.8"></a-ring>
+    </a-entity>
+    <a-entity meta-touch-controls="hand: left" agarrador></a-entity>
+    <a-entity meta-touch-controls="hand: right" agarrador></a-entity>
+    <a-entity hand-tracking-controls="hand: left" agarrador></a-entity>
+    <a-entity hand-tracking-controls="hand: right" agarrador></a-entity>
+  </a-entity>
+
+  <!-- Luces -->
+  <a-entity light="type: ambient; intensity: 0.5; color: #fff"></a-entity>
+  <a-entity light="type: point; intensity: 1.2; distance: 12; color: #ffe6c0" position="0 2.7 -0.5"></a-entity>
+  <a-sphere radius="0.08" position="0 2.85 -0.5" material="shader: flat; color: #fff4dc"></a-sphere>
+
+  <!-- Sala -->
+  <a-plane rotation="-90 0 0" width="8" height="8" color="#8a6a4a"></a-plane>
+  <a-plane rotation="90 0 0" position="0 3 0" width="8" height="8" color="#e8e4dc"></a-plane>
+  <a-plane position="0 1.5 -4" width="8" height="3" color="#c9d6df"></a-plane>
+  <a-plane position="0 1.5 4" rotation="0 180 0" width="8" height="3" color="#c9d6df"></a-plane>
+  <a-plane position="-4 1.5 0" rotation="0 90 0" width="8" height="3" color="#dfd3c3"></a-plane>
+  <a-plane position="4 1.5 0" rotation="0 -90 0" width="8" height="3" color="#dfd3c3"></a-plane>
+  <!-- ventana -->
+  <a-plane position="0 1.7 -3.99" width="2.2" height="1.2" material="shader: flat; color: #9fd4ff"></a-plane>
+  <a-box position="0 1.7 -3.98" width="0.06" height="1.2" depth="0.02" color="#fff"></a-box>
+  <!-- alfombra -->
+  <a-circle rotation="-90 0 0" position="0 0.005 -0.6" radius="1.6" color="#8e3b46"></a-circle>
+
+  <!-- Mesa -->
+  <a-box position="0 0.76 -1.2" width="1.6" height="0.04" depth="0.9" color="#6b4a2f"></a-box>
+  <a-box position="-0.72 0.37 -1.6" width="0.06" height="0.74" depth="0.06" color="#5a3d26"></a-box>
+  <a-box position="0.72 0.37 -1.6" width="0.06" height="0.74" depth="0.06" color="#5a3d26"></a-box>
+  <a-box position="-0.72 0.37 -0.8" width="0.06" height="0.74" depth="0.06" color="#5a3d26"></a-box>
+  <a-box position="0.72 0.37 -0.8" width="0.06" height="0.74" depth="0.06" color="#5a3d26"></a-box>
+
+  <!-- Estantería -->
+  <a-box position="-3.7 1 -2" width="0.5" height="2" depth="1.4" color="#4d3a2a"></a-box>
+  <a-box position="3.7 0.4 1" width="0.5" height="0.8" depth="1.6" color="#3f5a4a"></a-box>
+
+  <!-- Objetos que se pueden coger -->
+  <a-box agarrable data-size="0.05" position="-0.4 0.83 -1.1" width="0.1" height="0.1" depth="0.1" material="color: #e8564d"></a-box>
+  <a-sphere agarrable data-size="0.06" position="0 0.84 -1.0" radius="0.06" material="color: #4a90d9"></a-sphere>
+  <a-cylinder agarrable data-size="0.07" position="0.4 0.85 -1.15" radius="0.04" height="0.14" material="color: #ffcd75"></a-cylinder>
+  <a-box agarrable data-size="0.04" position="0.2 0.82 -1.4" width="0.08" height="0.08" depth="0.08" material="color: #38b764"></a-box>
+  <a-dodecahedron agarrable data-size="0.06" position="-0.15 0.84 -1.45" radius="0.06" material="color: #b86bd9"></a-dodecahedron>
+
+  <a-text value="VR: coge con el boton de agarre o pellizcando\nMonitor: WASD + raton, clic coge/suelta, clic derecho lanza" align="center"
+          position="0 2.1 -3.9" width="4" color="#233"></a-text>
+</a-scene>
+</body>
+</html>

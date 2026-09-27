@@ -13,6 +13,7 @@ const ASSETS = [
   './games/escuadron/index.html',
   './games/convoy/index.html',
   './games/ciclista/index.html',
+  './games/sala-vr/index.html',
   './manifest.webmanifest',
   './icon.svg',
   './icon-maskable.svg'
