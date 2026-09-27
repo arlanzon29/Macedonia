@@ -638,17 +638,23 @@ say('¡Kael, despierta! Ahora el valle es de tres dimensiones. FLECHAS: moverte 
 // mesa real (1 baldosa = 10 cm), recortada en un cuadrado, que se desplaza para que
 // Kael quede siempre en el centro.
 // JOYSTICK: moverse · GATILLO: espada · A / B / X / Y: hablar y leer.
-// BOTÓN DE AGARRE: mientras se mantiene, la maqueta sigue al mando (para ponerla en la mesa).
+// BOTÓN DE AGARRE: mientras se mantiene, la maqueta sigue al mando y gira con él
+// (para ponerla y orientarla en la mesa). El joystick va según hacia dónde miras, no
+// según el giro de la maqueta: empujar adelante siempre aleja a Kael de ti.
 // El HUD va en un panel flotante encima de la maqueta.
 // =====================================================================
-const AR = { k: .1, r: .3, centro: new THREE.Vector3(0, .8, -.55) };
-const arFoco = new THREE.Vector3();
+const AR = { k: .1, r: .3, centro: new THREE.Vector3(0, .8, -.55), giro: 0 };
+const EJE_Y = new THREE.Vector3(0, 1, 0);
+const arFoco = new THREE.Vector3(), arTmp = new THREE.Vector3(), arQ = new THREE.Quaternion();
 const recorte = [new THREE.Plane(), new THREE.Plane(), new THREE.Plane(), new THREE.Plane()];
 function situarRecorte() {
-  const c = AR.centro, r = AR.r;
-  recorte[0].set(new THREE.Vector3(1, 0, 0), -(c.x - r)); recorte[1].set(new THREE.Vector3(-1, 0, 0), c.x + r);
-  recorte[2].set(new THREE.Vector3(0, 0, 1), -(c.z - r)); recorte[3].set(new THREE.Vector3(0, 0, -1), c.z + r);
+  // cuatro planos verticales (girados con la maqueta) que dejan ver solo el cuadrado central
+  [[1, 0], [-1, 0], [0, 1], [0, -1]].forEach(([x, z], i) => {
+    const n = new THREE.Vector3(x, 0, z).applyAxisAngle(EJE_Y, AR.giro);
+    recorte[i].setFromNormalAndCoplanarPoint(n, AR.centro.clone().addScaledVector(n, -AR.r));
+  });
 }
+const yawDe = d => Math.atan2(-d.x, -d.z);   // giro horizontal de una dirección (0 = mirando a -z)
 const hudC = document.createElement('canvas'); hudC.width = W; hudC.height = H;
 const hudTex = new THREE.CanvasTexture(hudC);
 hudTex.magFilter = hudTex.minFilter = THREE.NearestFilter; hudTex.generateMipmaps = false; hudTex.colorSpace = THREE.SRGBColorSpace;
@@ -671,20 +677,30 @@ function arInput(frame) {
     sword ||= gp.buttons[0]?.pressed;
     act ||= [4, 5].some(i => gp.buttons[i]?.pressed);
     if (gp.buttons[1]?.pressed && src.gripSpace) {
-      const p = frame.getPose(src.gripSpace, ref)?.transform.position;
-      if (p) { AR.centro.set(p.x, Math.max(p.y - .03, 0), p.z); situarRecorte(); }
+      const t = frame.getPose(src.gripSpace, ref)?.transform;
+      if (t) {
+        AR.centro.set(t.position.x, Math.max(t.position.y - .03, 0), t.position.z);
+        const o = t.orientation, f = arTmp.set(0, 0, -1).applyQuaternion(arQ.set(o.x, o.y, o.z, o.w));
+        if (Math.hypot(f.x, f.z) > .2) AR.giro = yawDe(f);   // apuntando casi en vertical no se cambia el giro
+        situarRecorte();
+      }
     }
   }
-  arKey('left', x < -.45); arKey('right', x > .45); arKey('up', y < -.45); arKey('down', y > .45);
+  // el joystick se lleva de "hacia dónde miro" a las direcciones del mapa
+  const cabeza = yawDe(renderer.xr.getCamera().getWorldDirection(arTmp));
+  const v = arTmp.set(x, 0, y).applyAxisAngle(EJE_Y, cabeza - AR.giro);
+  arKey('left', v.x < -.45); arKey('right', v.x > .45); arKey('up', v.z < -.45); arKey('down', v.z > .45);
   arKey('sword', sword); arKey('act', act);
 }
 function arPose() {
   // la maqueta se desliza con suavidad para seguir a Kael, como hacía la cámara
   arFoco.x += (hero.x - arFoco.x) * .08; arFoco.z += (hero.z - arFoco.z) * .08;
   scene.scale.setScalar(AR.k);
-  scene.position.copy(AR.centro).addScaledVector(arFoco, -AR.k);
-  // el panel es hijo de la escena: se deshace su escala para dejarlo fijo sobre la maqueta
-  panel.position.set(AR.centro.x, AR.centro.y + .4, AR.centro.z - AR.r + .02).sub(scene.position).divideScalar(AR.k);
+  scene.rotation.y = AR.giro;
+  scene.position.copy(AR.centro).sub(arTmp.copy(arFoco).multiplyScalar(AR.k).applyAxisAngle(EJE_Y, AR.giro));
+  // el panel es hijo de la escena: se deshace su escala para dejarlo fijo sobre el borde del fondo
+  panel.position.set(0, .4, -AR.r + .02).applyAxisAngle(EJE_Y, AR.giro).add(AR.centro)
+    .sub(scene.position).applyAxisAngle(EJE_Y, -AR.giro).divideScalar(AR.k);
   panel.scale.setScalar(1 / AR.k);
   g = hudC.getContext('2d'); g.clearRect(0, 0, W, H); hud(); g = sg;
   hudTex.needsUpdate = true;
@@ -700,7 +716,7 @@ renderer.xr.addEventListener('sessionstart', () => {
 });
 renderer.xr.addEventListener('sessionend', () => {
   for (const k in arKeys) arKey(k, false);
-  scene.scale.setScalar(1); scene.position.set(0, 0, 0);
+  scene.scale.setScalar(1); scene.position.set(0, 0, 0); scene.rotation.y = 0;
   SNAP.value.set(W, H);
   scene.background = new THREE.Color(SKY); scene.fog = new THREE.Fog(SKY, 9, 17); outside.visible = true;
   renderer.setClearColor(0x000000, 1); renderer.clippingPlanes = [];
@@ -728,6 +744,6 @@ function loop(now, frame) {
 document.fonts.load('8px "Press Start 2P"').finally(() => { document.getElementById('loading').remove(); renderer.setAnimationLoop(loop); });
 window.dbg = { get hero() { return hero; }, get enemies() { return enemies; }, get state() { return state; }, press, release, map, cuttable };
 </script>
-<a href="../../index.html" id="back-menu" title="Volver al Arcade" onmouseenter="this.style.opacity=1" onmouseleave="this.style.opacity=.7" style="opacity:.7;position:fixed;bottom:14px;left:14px;z-index:9999;font:bold 11px/1 'Press Start 2P',monospace;color:#1a1020;background:#f0c040;padding:8px 10px;text-decoration:none;box-shadow:inset -3px -3px #b07820,0 0 0 3px #1a1020;">← ARCADE · <span class="ver">v10</span></a>
+<a href="../../index.html" id="back-menu" title="Volver al Arcade" onmouseenter="this.style.opacity=1" onmouseleave="this.style.opacity=.7" style="opacity:.7;position:fixed;bottom:14px;left:14px;z-index:9999;font:bold 11px/1 'Press Start 2P',monospace;color:#1a1020;background:#f0c040;padding:8px 10px;text-decoration:none;box-shadow:inset -3px -3px #b07820,0 0 0 3px #1a1020;">← ARCADE · <span class="ver">v11</span></a>
 </body>
 </html>
