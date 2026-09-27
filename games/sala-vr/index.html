@@ -87,6 +87,65 @@ AFRAME.registerComponent('agarrador', {
   }
 });
 
+// Movimiento con el mando: empuja el joystick hacia delante, apunta a un círculo del
+// suelo y suéltalo para aparecer allí. Joystick a los lados = giro de 45°.
+AFRAME.registerComponent('teletransporte', {
+  init() {
+    this.apuntando = false;
+    this.elegido = null;
+    this.girado = false;
+    this.rig = document.getElementById('rig');
+    this.el.addEventListener('thumbstickmoved', e => this.stick(e.detail.x, e.detail.y));
+  },
+  puntos() { return [...document.querySelectorAll('.punto')]; },
+  stick(x, y) {
+    if (y < -0.6) this.apuntando = true;
+    else if (this.apuntando && Math.abs(y) < 0.3) this.ir();
+    // giro por pasos: hay que volver al centro para girar otra vez
+    if (Math.abs(x) > 0.7 && Math.abs(y) < 0.5 && !this.girado) { this.girar(x > 0 ? -45 : 45); this.girado = true; }
+    if (Math.abs(x) < 0.3) this.girado = false;
+  },
+  tick() {
+    if (!this.apuntando) return;
+    // punto donde el rayo del mando corta el suelo; se elige el círculo más cercano
+    const o = this.el.object3D.getWorldPosition(new THREE.Vector3());
+    const d = new THREE.Vector3(0, 0, -1).applyQuaternion(this.el.object3D.getWorldQuaternion(new THREE.Quaternion()));
+    let objetivo = null;
+    if (d.y < -0.05) objetivo = o.clone().addScaledVector(d, -o.y / d.y);
+    let mejor = null, mejorD = 1.5;
+    for (const p of this.puntos()) {
+      const dist = objetivo ? p.object3D.position.distanceTo(objetivo.setY(0)) : Infinity;
+      if (dist < mejorD) { mejorD = dist; mejor = p; }
+    }
+    if (mejor !== this.elegido) {
+      this.elegido?.setAttribute('material', 'color', '#7fd4ff');
+      mejor?.setAttribute('material', 'color', '#ffe066');
+      this.elegido = mejor;
+    }
+  },
+  ir() {
+    this.apuntando = false;
+    const p = this.elegido;
+    if (!p) return;
+    p.setAttribute('material', 'color', '#7fd4ff');
+    this.elegido = null;
+    // colocar el rig para que la cabeza (no el centro del rig) quede sobre el círculo
+    const cabeza = document.querySelector('[camera]').object3D.getWorldPosition(new THREE.Vector3());
+    const r = this.rig.object3D.position;
+    r.x += p.object3D.position.x - cabeza.x;
+    r.z += p.object3D.position.z - cabeza.z;
+  },
+  girar(grados) {
+    // girar alrededor de la cabeza para no desplazarse al girar
+    const rig = this.rig.object3D;
+    const cabeza = document.querySelector('[camera]').object3D.getWorldPosition(new THREE.Vector3());
+    const a = THREE.MathUtils.degToRad(grados);
+    const off = rig.position.clone().sub(cabeza).applyAxisAngle(new THREE.Vector3(0, 1, 0), a);
+    rig.position.set(cabeza.x + off.x, rig.position.y, cabeza.z + off.z);
+    rig.rotation.y += a;
+  }
+});
+
 // Para probar en el monitor: el ratón se captura al hacer clic (Esc para soltarlo).
 // Clic izquierdo coge/suelta lo que haya en el centro de la pantalla; clic derecho lo lanza.
 AFRAME.registerComponent('raton-agarre', {
@@ -155,8 +214,8 @@ AFRAME.registerComponent('raton-agarre', {
       <a-ring class="mira" radius-inner="0.004" radius-outer="0.007" position="0 0 -0.5"
               material="shader: flat; color: #fff; opacity: 0.8"></a-ring>
     </a-entity>
-    <a-entity meta-touch-controls="hand: left" agarrador></a-entity>
-    <a-entity meta-touch-controls="hand: right" agarrador></a-entity>
+    <a-entity meta-touch-controls="hand: left" agarrador teletransporte></a-entity>
+    <a-entity meta-touch-controls="hand: right" agarrador teletransporte></a-entity>
     <a-entity hand-tracking-controls="hand: left" agarrador></a-entity>
     <a-entity hand-tracking-controls="hand: right" agarrador></a-entity>
   </a-entity>
@@ -179,6 +238,14 @@ AFRAME.registerComponent('raton-agarre', {
   <!-- alfombra -->
   <a-circle rotation="-90 0 0" position="0 0.005 -0.6" radius="1.6" color="#8e3b46"></a-circle>
 
+  <!-- Puntos de teletransporte -->
+  <a-ring class="punto" rotation="-90 0 0" position="0 0.01 0.6" radius-inner="0.25" radius-outer="0.32" material="shader: flat; color: #7fd4ff"></a-ring>
+  <a-ring class="punto" rotation="-90 0 0" position="-1.3 0.01 -1.2" radius-inner="0.25" radius-outer="0.32" material="shader: flat; color: #7fd4ff"></a-ring>
+  <a-ring class="punto" rotation="-90 0 0" position="1.3 0.01 -1.2" radius-inner="0.25" radius-outer="0.32" material="shader: flat; color: #7fd4ff"></a-ring>
+  <a-ring class="punto" rotation="-90 0 0" position="0 0.01 -2.7" radius-inner="0.25" radius-outer="0.32" material="shader: flat; color: #7fd4ff"></a-ring>
+  <a-ring class="punto" rotation="-90 0 0" position="-2.6 0.01 -2" radius-inner="0.25" radius-outer="0.32" material="shader: flat; color: #7fd4ff"></a-ring>
+  <a-ring class="punto" rotation="-90 0 0" position="2.6 0.01 1.8" radius-inner="0.25" radius-outer="0.32" material="shader: flat; color: #7fd4ff"></a-ring>
+
   <!-- Mesa -->
   <a-box position="0 0.76 -1.2" width="1.6" height="0.04" depth="0.9" color="#6b4a2f"></a-box>
   <a-box position="-0.72 0.37 -1.6" width="0.06" height="0.74" depth="0.06" color="#5a3d26"></a-box>
@@ -197,7 +264,7 @@ AFRAME.registerComponent('raton-agarre', {
   <a-box agarrable data-size="0.04" position="0.2 0.82 -1.4" width="0.08" height="0.08" depth="0.08" material="color: #38b764"></a-box>
   <a-dodecahedron agarrable data-size="0.06" position="-0.15 0.84 -1.45" radius="0.06" material="color: #b86bd9"></a-dodecahedron>
 
-  <a-text value="VR: coge con el boton de agarre o pellizcando\nMonitor: WASD + raton, clic coge/suelta, clic derecho lanza" align="center"
+  <a-text value="VR: coge con el boton de agarre o pellizcando\nJoystick adelante: apunta a un circulo y suelta. Lados: girar\nMonitor: WASD + raton, clic coge/suelta, clic derecho lanza" align="center"
           position="0 2.1 -3.9" width="4" color="#233"></a-text>
 </a-scene>
 </body>
