@@ -1,0 +1,733 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>Villahoja AR</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { background:#140c1c; height:100vh; display:grid; place-items:center; overflow:hidden; font-family:'Press Start 2P', monospace; user-select:none; }
+  canvas { width:min(100vw, 177.7vh); image-rendering:pixelated; display:block; }
+  #loading { position:fixed; color:#f0f4f8; font-size:12px; }
+  .pad { position:fixed; bottom:18px; display:none; }
+  @media (hover:none) { .pad { display:grid; } #back-menu { bottom:auto !important; top:14px; } }
+  .pad button { font:inherit; font-size:12px; border:0; background:#f0f4f8aa; color:#1a1020; touch-action:none; }
+  #dpad { left:18px; grid-template:repeat(3, 44px) / repeat(3, 44px); }
+  #dpad button[data-k=up] { grid-area:1/2; } #dpad button[data-k=left] { grid-area:2/1; }
+  #dpad button[data-k=right] { grid-area:2/3; } #dpad button[data-k=down] { grid-area:3/2; }
+  #ab { right:18px; grid-auto-flow:column; gap:14px; align-items:end; }
+  #ab button { width:60px; height:60px; border-radius:50%; }
+  #ab button[data-k=act] { margin-bottom:34px; background:#f0c040cc; }
+  #vr-btn { position:fixed; top:14px; right:14px; z-index:9999; display:none; font:inherit; font-size:11px; color:#1a1020;
+            background:#3ff0ff; border:0; padding:8px 10px; cursor:pointer; box-shadow:inset -3px -3px #1a86d8,0 0 0 3px #1a1020; }
+</style>
+</head>
+<body>
+<canvas id="screen" width="320" height="180"></canvas>
+<div id="loading">CARGANDO...</div>
+<div class="pad" id="dpad"><button data-k="up">▲</button><button data-k="left">◀</button><button data-k="right">▶</button><button data-k="down">▼</button></div>
+<button id="vr-btn">ENTRAR EN AR</button>
+<div class="pad" id="ab"><button data-k="sword">⚔</button><button data-k="act">A</button></div>
+<script type="module">
+import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js';
+
+// =====================================================================
+// PANTALLA: Three.js dibuja a 320x180; luego se copia a un lienzo 2D donde se aplica
+// el tramado de color de 15 bits (como la PS1) y se pinta el HUD en píxeles.
+// =====================================================================
+const W = 320, H = 180, O = '#1a1020';
+const screen = document.getElementById('screen'), sg = screen.getContext('2d', { willReadFrequently: true });
+let g = sg;                                  // lienzo donde pinta el HUD (en AR, el del panel flotante)
+g.imageSmoothingEnabled = false;
+const renderer = new THREE.WebGLRenderer({ antialias: false, alpha: true });
+renderer.xr.enabled = true; renderer.xr.setReferenceSpaceType('local-floor');
+renderer.setPixelRatio(1); renderer.setSize(W, H, false);
+const scene = new THREE.Scene();
+const SKY = 0x8ab0e0;
+scene.background = new THREE.Color(SKY);
+scene.fog = new THREE.Fog(SKY, 9, 17);
+const camera = new THREE.PerspectiveCamera(42, W / H, 0.1, 40);
+scene.add(new THREE.AmbientLight(0xffffff, 1.4));
+const sun = new THREE.DirectionalLight(0xfff0d0, 2.2); sun.position.set(-4, 8, 5); scene.add(sun);
+
+const hash = n => { const x = Math.sin(n * 127.1 + 311.7) * 43758.5453; return x - Math.floor(x); };
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+
+// --- material "PS1": iluminación por vértice y vértices ajustados a una rejilla de pantalla (tiemblan) ---
+// (en AR el temblor se quita: con la cabeza moviéndose marea)
+const SNAP = { value: new THREE.Vector2(320, 180) };
+function mat(opts) {
+  const m = new THREE.MeshLambertMaterial({ flatShading: true, ...opts });
+  m.onBeforeCompile = sh => {
+    sh.uniforms.SNAP = SNAP;
+    sh.vertexShader = 'uniform vec2 SNAP;\n' + sh.vertexShader.replace('#include <project_vertex>',
+      '#include <project_vertex>\n  gl_Position.xy = floor(gl_Position.xy / gl_Position.w * SNAP + 0.5) / SNAP * gl_Position.w;');
+  };
+  return m;
+}
+// --- texturas pixeladas dibujadas por código ---
+function tex(w, h, draw, rx = 1, ry = 1) {
+  const c = document.createElement('canvas'); c.width = w; c.height = h; const x = c.getContext('2d');
+  draw((px, py, pw, ph, col) => { x.fillStyle = col; x.fillRect(px, py, pw, ph); }, x);
+  const t = new THREE.CanvasTexture(c);
+  t.magFilter = t.minFilter = THREE.NearestFilter; t.generateMipmaps = false; t.colorSpace = THREE.SRGBColorSpace;
+  t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(rx, ry);
+  return t;
+}
+const noise = (P, w, h, cols, n, seed) => { for (let i = 0; i < n; i++) P(Math.floor(hash(seed + i) * w), Math.floor(hash(seed + i + 99) * h), 1, 1, cols[i % cols.length]); };
+
+const T = {
+  bark: tex(8, 16, P => { P(0, 0, 8, 16, '#5a3a28'); for (let x = 1; x < 8; x += 3) P(x, 0, 1, 16, '#3a2418'); noise(P, 8, 16, ['#8a5028'], 6, 1); }),
+  leaves: tex(16, 16, P => { P(0, 0, 16, 16, '#307838'); noise(P, 16, 16, ['#48a048', '#58b050', '#1f5a28'], 40, 2); }),
+  bush: tex(16, 16, P => { P(0, 0, 16, 16, '#48a048'); noise(P, 16, 16, ['#58b050', '#90d870', '#307838'], 36, 3); }),
+  rock: tex(16, 16, P => { P(0, 0, 16, 16, '#8a90b0'); noise(P, 16, 16, ['#707888', '#a8b0c8', '#5a6070'], 40, 4); }),
+  roof: tex(16, 16, P => { P(0, 0, 16, 16, '#c83838'); for (let r = 0; r < 4; r++) { P(0, r * 4 + 3, 16, 1, '#801c28'); for (let k = (r % 2) * 4; k < 16; k += 8) P(k, r * 4, 1, 3, '#801c28'); } }, 3, 2),
+  wall: tex(16, 16, P => { P(0, 0, 16, 16, '#e8d090'); P(0, 0, 16, 1, '#8a5028'); P(0, 15, 16, 1, '#8a5028'); P(0, 0, 1, 16, '#8a5028'); noise(P, 16, 16, ['#d8c080'], 12, 5); }, 4, 1),
+  wood: tex(16, 16, P => { P(0, 0, 16, 16, '#8a5028'); for (let y = 3; y < 16; y += 4) P(0, y, 16, 1, '#5a3018'); noise(P, 16, 16, ['#b07820'], 8, 6); }),
+  door: tex(16, 16, P => { P(0, 0, 16, 16, '#5a3018'); P(1, 1, 14, 15, '#3a2418'); P(7, 1, 2, 15, '#5a3018'); P(11, 8, 2, 2, '#f0c040'); }),
+  window: tex(8, 8, P => { P(0, 0, 8, 8, '#5a3018'); P(1, 1, 6, 6, '#1c3c80'); P(1, 1, 3, 2, '#4878d8'); P(4, 1, 1, 6, '#5a3018'); }),
+  sign: tex(16, 8, P => { P(0, 0, 16, 8, '#b07820'); P(0, 0, 16, 1, '#f0c040'); P(3, 2, 10, 1, '#5a3018'); P(3, 4, 7, 1, '#5a3018'); }),
+  tunic: tex(8, 8, P => { P(0, 0, 8, 8, '#3060c0'); P(0, 0, 1, 8, '#4878d8'); P(0, 5, 8, 2, '#5a3a28'); P(3, 5, 2, 2, '#f0c040'); P(0, 7, 8, 1, '#1c3c80'); }),
+  hair: tex(16, 16, P => { P(0, 0, 16, 16, '#8a5028'); P(0, 13, 16, 3, '#5a3018');   // mechones sueltos, más oscuro en la nuca
+    for (let k = 0; k < 6; k++) { const x = 1 + k * 3 - (k % 2); P(x, 4 + (k % 3) * 2, 1, 6, '#5a3018'); P(x + 1, 13, 1, 2, '#8a5028'); }
+    P(3, 1, 4, 1, '#b07820'); P(9, 2, 3, 1, '#b07820'); }),
+  // cara de Kael: flequillo en punta, ojos grandes con brillo y boca (el mismo diseño que el sprite)
+  face: tex(16, 16, P => {
+    P(0, 0, 16, 16, '#f0b890');
+    P(0, 0, 16, 5, '#8a5028'); for (let k = 0; k < 4; k++) { P(1 + k * 4, 5, 2, 1, '#8a5028'); P(2 + k * 4, 6, 1, 1, '#5a3018'); }
+    P(0, 0, 2, 12, '#8a5028'); P(14, 0, 2, 12, '#8a5028');
+    P(3, 8, 3, 4, '#f0f4f8'); P(5, 8, 2, 4, '#1a1020'); P(10, 8, 3, 4, '#f0f4f8'); P(9, 8, 2, 4, '#1a1020');
+    P(3, 7, 4, 1, '#5a3018'); P(9, 7, 4, 1, '#5a3018');
+    P(7, 13, 2, 1, '#c07850'); P(2, 12, 2, 1, '#e8a080'); P(12, 12, 2, 1, '#e8a080');
+  }),
+  water: tex(16, 16, P => { P(0, 0, 16, 16, '#3060c0'); for (const y of [2, 7, 12]) for (let x = 0; x < 16; x++) if ((x + y * 3) % 8 < 3) P(x, y, 1, 1, '#4878d8'); P(4, 4, 1, 1, '#90b8f0'); P(11, 10, 1, 1, '#90b8f0'); }),
+  grassBlades: (() => { const t = tex(16, 16, (P, x) => { x.clearRect(0, 0, 16, 16);
+    for (let bx = 0; bx < 16; bx += 2) { const h = 8 + Math.floor(hash(bx) * 7); P(bx, 16 - h, 1, h, bx % 4 ? '#48a048' : '#307838'); P(bx, 16 - h, 1, 1, '#90d870'); } }); t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping; return t; })(),
+};
+
+// =====================================================================
+// MAPA: el mismo de la versión 2D (T árbol · b arbusto · " hierba alta · R roca · ~ agua · = puente · : camino
+// H/W/D casa · S cartel · C cofre · F valla · P inicio · s slime · o pulpo)
+// =====================================================================
+const MAP_SRC = [
+  'TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT',
+  'T..,....""""...::.....TT~~~~~~~~TTTTTTTT',
+  'T.HHHH..""b"...::..,...T~~~~~~~~~T..b..T',
+  'T.HHHH...b.....::......~~~~~~~~~~...."T',
+  'T.WDWW.S.......::.......~~~~~~~~~~.."".T',
+  'T....::::::::::::::::::===========::::.T',
+  'T.,..:.P.b..,.......,..~~~~~~~~~~..:..T',
+  'T...F:FFF.....s........~~~~~~~~~..:.,.T',
+  'T...F:..F..""""...R.....~~~~~~~...:.b.T',
+  'T...F...F..""""..RR.......~~~....:....T',
+  'T..bFFFFF..."".....o..............:.,.T',
+  'TT..............,.........b......:...TT',
+  'T..RR....bb........"""".........:....T',
+  'T..R...,...b.....s.""""....o....:..,.T',
+  'T.......TT.............b.......:.....T',
+  'T..""..TTTT....RRR.............:..C..T',
+  'T..""...TT.....R.R....,........:.....T',
+  'T..............R.RR....b......::..,..T',
+  'T.,....b..s.................:::......T',
+  'T..........""""....o......:::....b...T',
+  'T...R......""""...........:.........T',
+  'T.......,.............b...:....s....T',
+  'T..........................:..,.....T',
+  'TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT',
+];
+const MW = 40, MH = MAP_SRC.length;
+const map = MAP_SRC.map(r => r.padEnd(MW, 'T').slice(0, MW).split(''));
+const at = (x, z) => (map[z] && map[z][x]) || 'T';
+const SOLID = new Set(['T', 'R', '~', 'H', 'W', 'D', 'S', 'C', 'c', 'b', 'F']);
+const SIGN_TEXT = 'VILLAHOJA. Corta hierba y arbustos con la espada: a veces esconden corazones y gemas. Al sureste hay un cofre.';
+
+// =====================================================================
+// CONSTRUCCIÓN DEL MUNDO
+// =====================================================================
+const G = {                                  // geometrías compartidas
+  box: new THREE.BoxGeometry(1, 1, 1), trunk: new THREE.CylinderGeometry(.12, .16, .7, 5),
+  canopy: new THREE.IcosahedronGeometry(.62, 0), bush: new THREE.IcosahedronGeometry(.42, 0), rock: new THREE.DodecahedronGeometry(.42, 0),
+  blade: new THREE.PlaneGeometry(.9, .6), shadow: new THREE.CircleGeometry(.34, 8), tile: new THREE.PlaneGeometry(1, 1, 2, 2),
+};
+const M = {
+  bark: mat({ map: T.bark }), leaves: mat({ map: T.leaves }), bush: mat({ map: T.bush }), rock: mat({ map: T.rock }),
+  roof: mat({ map: T.roof }), wall: mat({ map: T.wall }), wood: mat({ map: T.wood }), door: mat({ map: T.door }), window: mat({ map: T.window }),
+  sign: mat({ map: T.sign }), gold: mat({ color: 0xf0c040 }), dark: mat({ color: 0x3a2418 }),
+  water: mat({ map: T.water, transparent: true, opacity: .88 }),
+  leavesFade: mat({ map: T.leaves, transparent: true, opacity: .3, depthWrite: false }),
+  barkFade: mat({ map: T.bark, transparent: true, opacity: .3, depthWrite: false }),
+  blades: mat({ map: T.grassBlades, alphaTest: .5, side: THREE.DoubleSide }),
+  shadow: new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: .3, depthWrite: false }),
+  flowerW: mat({ color: 0xf0f4f8 }), flowerR: mat({ color: 0xe04030 }),
+};
+function mesh(geo, material, x, y, z, sx = 1, sy = 1, sz = 1, parent = scene) {
+  const m = new THREE.Mesh(geo, material); m.position.set(x, y, z); m.scale.set(sx, sy, sz); parent.add(m); return m;
+}
+function shadowUnder(parent, r = 1) { const s = mesh(G.shadow, M.shadow, 0, .02, 0, r, r, r, parent); s.rotation.x = -Math.PI / 2; return s; }
+
+// suelo: una textura grande con la hierba y el camino dibujados baldosa a baldosa
+const groundTex = tex(MW * 16, MH * 16, P => {
+  for (let z = 0; z < MH; z++) for (let x = 0; x < MW; x++) {
+    const ch = at(x, z), X = x * 16, Z = z * 16, n = x * 97 + z * 57;
+    if (ch === ':' || ch === '=' ) {
+      P(X, Z, 16, 16, '#e8d090');
+      for (let k = 0; k < 5; k++) P(X + Math.floor(hash(n + k * 3) * 15), Z + Math.floor(hash(n + k * 3 + 1) * 15), 1, 1, '#b09050');
+    } else if (ch === '~') P(X, Z, 16, 16, '#1c3c80');
+    else {
+      P(X, Z, 16, 16, '#58b050');
+      for (let k = 0; k < 4; k++) { if (hash(n + k * 13) < .45) continue;
+        const px = Math.floor(hash(n + k * 13 + 1) * 13), py = Math.floor(hash(n + k * 13 + 2) * 13);
+        P(X + px, Z + py + 1, 1, 1, '#307838'); P(X + px + 1, Z + py + 2, 1, 1, '#307838'); P(X + px + 2, Z + py + 1, 1, 1, '#307838'); }
+    }
+  }
+});
+const ground = new THREE.Mesh(new THREE.PlaneGeometry(MW, MH, MW, MH), mat({ map: groundTex }));
+ground.rotation.x = -Math.PI / 2; ground.position.set(MW / 2, 0, MH / 2); scene.add(ground);
+const grassTile = tex(16, 16, P => {
+  P(0, 0, 16, 16, '#58b050');
+  for (const [x, y] of [[2, 3], [9, 1], [5, 9], [12, 11], [1, 13]]) { P(x, y + 1, 1, 1, '#307838'); P(x + 1, y + 2, 1, 1, '#307838'); P(x + 2, y + 1, 1, 1, '#307838'); }
+}, 120, 120);
+// sin ajuste de vértices: en un plano tan grande el temblor PS1 lo haría asomar por encima del suelo del mapa
+const outside = new THREE.Mesh(new THREE.PlaneGeometry(120, 120, 60, 60), new THREE.MeshLambertMaterial({ map: grassTile }));
+outside.rotation.x = -Math.PI / 2; outside.position.set(MW / 2, -.12, MH / 2); scene.add(outside);
+const trees = [];                            // árboles del mapa: se aclaran si tapan a Kael
+function tree(cx, cz, n, list) {
+  const s = .85 + hash(n) * .35, t = new THREE.Group(); t.position.set(cx, 0, cz); scene.add(t);
+  mesh(G.trunk, M.bark, 0, .35, 0, s, s, s, t);
+  const c1 = mesh(G.canopy, M.leaves, 0, .95 * s, 0, s, s * .95, s, t); c1.rotation.y = hash(n + 1) * 3;
+  mesh(G.canopy, M.leaves, 0, 1.35 * s, 0, s * .7, s * .7, s * .7, t);
+  if (list) list.push({ g: t, x: cx, z: cz, faded: false });
+}
+for (let z = -4; z < MH; z++) for (let x = -4; x < MW + 4; x++) {
+  if (x >= 0 && x < MW && z >= 0) continue;
+  if (hash(x * 13.1 + z * 7.7) > .45) tree(x + .5 + (hash(x + z) - .5) * .4, z + .5, x * 31 + z * 17);
+}
+
+const cuttable = new Map();                  // "x,z" -> objeto (arbusto o hierba alta)
+let chest = null, start = { x: 7.5, z: 6.5 };
+const spawns = [];
+let hb = { x0: 99, x1: -1, z0: 99, z1: -1 }, doorX = 0;
+
+for (let z = 0; z < MH; z++) for (let x = 0; x < MW; x++) {
+  const ch = at(x, z), cx = x + .5, cz = z + .5, n = x * 31 + z * 17;
+  switch (ch) {
+    case 'T': tree(cx, cz, n, trees); break;
+    case 'b': { const b = mesh(G.bush, M.bush, cx, .32, cz, 1, .8, 1); b.rotation.y = hash(n) * 3; cuttable.set(x + ',' + z, b); break; }
+    case '"': {
+      const gr = new THREE.Group(); gr.position.set(cx, .3, cz); scene.add(gr);
+      for (let k = 0; k < 3; k++) { const p = mesh(G.blade, M.blades, 0, 0, 0, 1, 1, 1, gr); p.rotation.y = k * Math.PI / 3 + hash(n) ; }
+      cuttable.set(x + ',' + z, gr); break;
+    }
+    case 'R': { const r = mesh(G.rock, M.rock, cx, .25, cz, 1, .7, 1); r.rotation.set(hash(n), hash(n + 1) * 3, 0); break; }
+    case '~': { const w = mesh(G.tile, M.water, cx, .05, cz); w.rotation.x = -Math.PI / 2; break; }
+    case '=': {
+      mesh(G.box, M.wood, cx, .1, cz, 1, .1, .9);
+      if (at(x, z - 1) === '~') mesh(G.box, M.wood, cx, .3, z + .06, 1, .06, .06);
+      if (at(x, z + 1) === '~') mesh(G.box, M.wood, cx, .3, z + .94, 1, .06, .06);
+      break;
+    }
+    case ',': for (let k = 0; k < 3; k++) mesh(G.box, hash(n + k) > .5 ? M.flowerW : M.flowerR, x + .2 + hash(n + k * 7) * .6, .05, z + .2 + hash(n + k * 9) * .6, .08, .08, .08); break;
+    case 'F': {
+      mesh(G.box, M.wood, cx, .3, cz, .12, .6, .12);
+      if (at(x + 1, z) === 'F') { mesh(G.box, M.wood, x + 1, .42, cz, 1, .06, .06); mesh(G.box, M.wood, x + 1, .22, cz, 1, .06, .06); }
+      if (at(x, z + 1) === 'F') { mesh(G.box, M.wood, cx, .42, z + 1, .06, .06, 1); mesh(G.box, M.wood, cx, .22, z + 1, .06, .06, 1); }
+      break;
+    }
+    case 'S': mesh(G.box, M.wood, cx, .25, cz, .08, .5, .08); mesh(G.box, [M.wood, M.wood, M.wood, M.wood, M.sign, M.wood], cx, .58, cz, .7, .36, .06); break;
+    case 'C': {
+      const c = new THREE.Group(); c.position.set(cx, 0, cz); scene.add(c);
+      mesh(G.box, M.wood, 0, .17, 0, .6, .34, .42, c);
+      mesh(G.box, M.gold, -.22, .17, 0, .05, .35, .43, c); mesh(G.box, M.gold, .22, .17, 0, .05, .35, .43, c);
+      const lid = new THREE.Group(); lid.position.set(0, .34, -.21); c.add(lid);
+      mesh(G.box, M.wood, 0, .07, .21, .6, .14, .42, lid); mesh(G.box, M.gold, 0, .05, .43, .1, .12, .03, lid);
+      chest = { x, z, lid, open: 0 };
+      break;
+    }
+    case 'H': case 'W': case 'D':
+      hb.x0 = Math.min(hb.x0, x); hb.x1 = Math.max(hb.x1, x); hb.z0 = Math.min(hb.z0, z); hb.z1 = Math.max(hb.z1, z);
+      if (ch === 'D') doorX = cx;
+      break;
+    case 'P': start = { x: cx, z: cz }; map[z][x] = '.'; break;
+    case 's': case 'o': spawns.push({ type: ch === 's' ? 'slime' : 'octo', x: cx, z: cz }); map[z][x] = '.'; break;
+  }
+}
+// casa: paredes, tejado a dos aguas, puerta y ventanas
+{
+  const w = hb.x1 - hb.x0 + 1, d = hb.z1 - hb.z0 + 1, cx = hb.x0 + w / 2, cz = hb.z0 + d / 2, wh = 1.3;
+  mesh(G.box, M.wall, cx, wh / 2, cz, w - .1, wh, d - .1);
+  const half = d / 2 + .15, ang = .62, len = half / Math.cos(ang);
+  for (const s of [-1, 1]) {
+    const r = mesh(G.box, M.roof, cx, wh + Math.sin(ang) * len / 2, cz + s * half / 2, w + .3, .1, len);
+    r.rotation.x = s * ang;
+  }
+  const gable = new THREE.Shape(); gable.moveTo(-half, 0); gable.lineTo(half, 0); gable.lineTo(0, Math.tan(ang) * half); gable.closePath();
+  for (const s of [-1, 1]) { const gm = mesh(new THREE.ShapeGeometry(gable), M.wall, cx + s * (w / 2 - .05), wh, cz); gm.rotation.y = Math.PI / 2; gm.material = mat({ map: T.wall, side: THREE.DoubleSide }); }
+  const front = hb.z1 + 1 - .04;
+  mesh(G.box, M.door, doorX, .45, front, .6, .9, .04);
+  for (const wx of [hb.x0 + .5, hb.x1 + .5, hb.x1 - .5]) if (Math.abs(wx - doorX) > .6) mesh(G.box, M.window, wx, .8, front, .4, .35, .04);
+}
+
+// =====================================================================
+// KAEL EN 3D: cabeza grande (chibi), cinta y pañuelo rojos, túnica azul, espada y escudo
+// =====================================================================
+const KM = { skin: mat({ color: 0xf0b890 }), hair: mat({ map: T.hair }), face: mat({ map: T.face }), red: mat({ color: 0xe04030 }),
+  tunic: mat({ map: T.tunic }), blue: mat({ color: 0x3060c0 }), dblue: mat({ color: 0x1c3c80 }), boot: mat({ color: 0x5a3018 }),
+  blade: mat({ color: 0xe8f0f8 }), gold: M.gold, grip: mat({ color: 0x5a3a28 }) };
+const hero3d = new THREE.Group(); scene.add(hero3d);
+const body = new THREE.Group(); hero3d.add(body);
+shadowUnder(hero3d, 1);
+function limb(parent, x, y, len, w, material, footMat) {
+  const pivot = new THREE.Group(); pivot.position.set(x, y, 0); parent.add(pivot);
+  mesh(G.box, material, 0, -len / 2, 0, w, len, w, pivot);
+  if (footMat) mesh(G.box, footMat, 0, -len + .04, .04, w + .02, .08, w + .1, pivot);
+  return pivot;
+}
+const legL = limb(body, .1, .34, .3, .14, KM.dblue, KM.boot), legR = limb(body, -.1, .34, .3, .14, KM.dblue, KM.boot);
+mesh(G.box, KM.tunic, 0, .5, 0, .42, .36, .28, body);
+mesh(G.box, KM.red, 0, .7, 0, .34, .07, .3, body);                           // pañuelo
+mesh(G.box, KM.red, 0, .64, .15, .1, .1, .04, body);                         // nudo
+const head = new THREE.Group(); head.position.y = .96; body.add(head);
+mesh(G.box, [KM.hair, KM.hair, KM.hair, KM.skin, KM.face, KM.hair], 0, 0, 0, .5, .46, .44, head);
+mesh(G.box, KM.hair, 0, .22, -.04, .52, .06, .46, head);                       // pelo de arriba
+for (let k = 0; k < 4; k++) { const sp = mesh(G.box, KM.hair, -.18 + k * .12, .31, .06, .08, .1, .08, head); sp.rotation.z = (k - 1.5) * .25; }
+mesh(G.box, KM.red, 0, .15, 0, .53, .07, .47, head);                          // cinta
+const tail1 = mesh(G.box, KM.red, .05, .12, -.3, .05, .05, .2, head), tail2 = mesh(G.box, KM.red, -.05, .1, -.3, .05, .05, .18, head);
+const armR = limb(body, -.28, .64, .3, .11, KM.blue), armL = limb(body, .28, .64, .3, .11, KM.blue);
+armR.rotation.order = 'YXZ';
+mesh(G.box, KM.skin, 0, -.33, 0, .12, .09, .12, armR); mesh(G.box, KM.skin, 0, -.33, 0, .12, .09, .12, armL);
+// espada: prolonga el brazo derecho (la hoja sigue la dirección del brazo)
+const sword = new THREE.Group(); sword.position.y = -.34; armR.add(sword);
+mesh(G.box, KM.grip, 0, 0, 0, .05, .12, .05, sword);
+mesh(G.box, KM.gold, 0, -.08, 0, .2, .04, .06, sword);
+mesh(G.box, KM.blade, 0, -.38, 0, .06, .56, .025, sword);
+// escudo en el brazo izquierdo, mirando al frente
+const shield = new THREE.Group(); shield.position.set(.06, -.24, .08); armL.add(shield);
+const sh1 = mesh(new THREE.CylinderGeometry(.2, .2, .04, 8), KM.gold, 0, 0, 0, 1, 1, 1, shield); sh1.rotation.x = Math.PI / 2;
+const sh2 = mesh(new THREE.CylinderGeometry(.16, .16, .05, 8), KM.blue, 0, 0, .005, 1, 1, 1, shield); sh2.rotation.x = Math.PI / 2;
+// estela del tajo: arco horizontal que se dibuja durante el golpe
+const trailMat = new THREE.MeshBasicMaterial({ color: 0xf0f4f8, transparent: true, opacity: .7, side: THREE.DoubleSide, depthWrite: false });
+const trail = new THREE.Mesh(new THREE.RingGeometry(.55, 1.05, 12, 1, Math.PI, .01), trailMat);
+trail.rotation.x = -Math.PI / 2; trail.position.y = .6; trail.visible = false; hero3d.add(trail);
+
+// =====================================================================
+// ENEMIGOS, OBJETOS Y PARTÍCULAS
+// =====================================================================
+function makeSlime() {
+  const g3 = new THREE.Group(), m = mat({ color: 0x58b050 });
+  const b = mesh(new THREE.IcosahedronGeometry(.3, 1), m, 0, .26, 0, 1, .8, 1, g3);
+  mesh(G.box, KM.blade, -.1, .32, .25, .08, .1, .04, g3); mesh(G.box, KM.blade, .1, .32, .25, .08, .1, .04, g3);
+  mesh(G.box, M.dark, -.08, .32, .27, .04, .08, .03, g3); mesh(G.box, M.dark, .12, .32, .27, .04, .08, .03, g3);
+  shadowUnder(g3, .9); return { g: g3, mats: [m], body: b };
+}
+function makeOcto() {
+  const g3 = new THREE.Group(), m = mat({ color: 0xe04030 }), md = mat({ color: 0x801c28 });
+  const b = mesh(new THREE.SphereGeometry(.3, 7, 5), m, 0, .42, 0, 1, .9, 1, g3);
+  const sn = mesh(new THREE.CylinderGeometry(.09, .11, .2, 6), md, 0, .38, .3, 1, 1, 1, g3); sn.rotation.x = Math.PI / 2;
+  mesh(G.box, KM.blade, -.12, .52, .24, .09, .1, .04, g3); mesh(G.box, KM.blade, .12, .52, .24, .09, .1, .04, g3);
+  mesh(G.box, M.dark, -.12, .52, .26, .04, .07, .03, g3); mesh(G.box, M.dark, .12, .52, .26, .04, .07, .03, g3);
+  const legs = [];
+  for (let k = 0; k < 4; k++) { const a = k * Math.PI / 2 + Math.PI / 4; legs.push(mesh(G.box, md, Math.cos(a) * .2, .1, Math.sin(a) * .2, .09, .2, .09, g3)); }
+  shadowUnder(g3, .9); return { g: g3, mats: [m, md], body: b, legs };
+}
+const gemGeo = new THREE.OctahedronGeometry(.13, 0);
+const PK = { heart: mat({ color: 0xe04030, emissive: 0x401010 }), gem: mat({ color: 0x58b050, emissive: 0x103010 }), gemB: mat({ color: 0x4878d8, emissive: 0x101840 }) };
+const rockGeo = new THREE.IcosahedronGeometry(.11, 0);
+const partGeo = new THREE.BoxGeometry(.07, .07, .07), partMats = {};
+const partMat = c => partMats[c] || (partMats[c] = new THREE.MeshBasicMaterial({ color: c }));
+
+let hero, enemies, rocks, pickups, parts, dialog, state, time = 0;
+const DIR4 = { up: [0, -1], down: [0, 1], left: [-1, 0], right: [1, 0] };
+
+function newGame(keepGems) {
+  enemies?.forEach(e => scene.remove(e.g)); rocks?.forEach(r => scene.remove(r.m)); pickups?.forEach(p => scene.remove(p.m));
+  hero = { x: start.x, z: start.z, fx: 0, fz: 1, ang: 0, anim: 0, moving: false, atk: -1, inv: 0, knock: 0, kx: 0, kz: 0,
+    hp: hero?.maxHp || 6, maxHp: hero?.maxHp || 6, gems: keepGems ? hero?.gems || 0 : 0 };
+  enemies = spawns.map(s => { const e = s.type === 'slime' ? makeSlime() : makeOcto(); scene.add(e.g);
+    return { ...e, type: s.type, x: s.x, z: s.z, hp: 2, t: Math.random(), vx: 0, vz: 0, hop: 0, knock: 0, flash: 0, shoot: 0, dir: 'down' }; });
+  rocks = []; pickups = []; parts = parts || []; state = 'play';
+}
+function say(text) {
+  const words = text.split(' '), lines = []; let cur = '';
+  for (const w of words) { if ((cur + ' ' + w).trim().length > 34) { lines.push(cur); cur = w; } else cur = (cur + ' ' + w).trim(); }
+  lines.push(cur);
+  const pages = []; for (let i = 0; i < lines.length; i += 3) pages.push(lines.slice(i, i + 3));
+  dialog = { pages, page: 0, chars: 0 }; state = 'dialog';
+}
+
+// --- colisiones con la rejilla del mapa (círculo contra baldosas sólidas) ---
+function free(x, z, r) {
+  for (const [px, pz] of [[x - r, z - r], [x + r, z - r], [x - r, z + r], [x + r, z + r]]) if (SOLID.has(at(Math.floor(px), Math.floor(pz)))) return false;
+  return true;
+}
+function moveC(o, dx, dz, r) {
+  let hit = false;
+  if (dx && free(o.x + dx, o.z, r)) o.x += dx; else if (dx) hit = true;
+  if (dz && free(o.x, o.z + dz, r)) o.z += dz; else if (dz) hit = true;
+  return hit;
+}
+
+function burst(x, y, z, cols, n = 8, sp = 2.5) {
+  for (let i = 0; i < n; i++) {
+    const m = new THREE.Mesh(partGeo, partMat(cols[i % cols.length])), a = Math.random() * 6.28, s = sp * (.4 + Math.random());
+    m.position.set(x, y, z); scene.add(m);
+    parts.push({ m, vx: Math.cos(a) * s, vy: 2 + Math.random() * 2, vz: Math.sin(a) * s, life: .5 + Math.random() * .3 });
+  }
+}
+function drop(x, z, chance) {
+  const r = Math.random(); let kind = null;
+  if (r < chance * .4) kind = 'heart'; else if (r < chance) kind = Math.random() < .15 ? 'gemB' : 'gem';
+  if (!kind) return;
+  const m = mesh(gemGeo, PK[kind], x, .3, z, kind === 'heart' ? 1.3 : 1, kind === 'heart' ? 1 : 1.7, kind === 'heart' ? .6 : 1);
+  pickups.push({ kind, x, z, m, t: 0 });
+}
+function cut(tx, tz) {
+  const key = tx + ',' + tz, o = cuttable.get(key);
+  if (!o) return;
+  scene.remove(o); cuttable.delete(key); map[tz][tx] = '.';
+  burst(tx + .5, .4, tz + .5, [0x48a048, 0x90d870, 0x307838], 10);
+  drop(tx + .5, tz + .5, .3);
+}
+function hurt(fx, fz, dmg) {
+  if (hero.inv > 0 || state !== 'play') return;
+  hero.hp -= dmg; hero.inv = 1.1; hero.knock = .16;
+  const d = Math.hypot(hero.x - fx, hero.z - fz) || 1; hero.kx = (hero.x - fx) / d * 7; hero.kz = (hero.z - fz) / d * 7;
+  if (hero.hp <= 0) { hero.hp = 0; state = 'over'; }
+}
+// la baldosa que tiene Kael delante (redondeando su orientación a 4 direcciones)
+function facingTile() {
+  const f4 = Math.abs(hero.fx) > Math.abs(hero.fz) ? [Math.sign(hero.fx), 0] : [0, Math.sign(hero.fz)];
+  const tx = Math.floor(hero.x + f4[0] * .75), tz = Math.floor(hero.z + f4[1] * .75);
+  return { tx, tz, ch: at(tx, tz) };
+}
+const ACTIONS = { S: 'LEER', D: 'ABRIR', C: 'ABRIR', c: 'MIRAR' };
+const facing = () => ACTIONS[facingTile().ch];
+function interact() {
+  const { tx, tz, ch } = facingTile();
+  if (ch === 'S') say(SIGN_TEXT);
+  else if (ch === 'D') say('La puerta de tu casa está cerrada. Mejor sigue explorando.');
+  else if (ch === 'C') {
+    map[tz][tx] = 'c'; chest.opening = true; hero.maxHp += 2; hero.hp = hero.maxHp;
+    burst(tx + .5, .6, tz + .5, [0xf0c040, 0xf0f4f8], 14, 2);
+    say('¡Has encontrado un CONTENEDOR DE CORAZÓN! Tu vida máxima aumenta.');
+  } else if (ch === 'c') say('El cofre está vacío.');
+}
+
+// =====================================================================
+// ENTRADA (igual que la versión 2D)
+// =====================================================================
+const keys = {}, KEYMAP = { ArrowUp: 'up', w: 'up', ArrowDown: 'down', s: 'down', ArrowLeft: 'left', a: 'left', ArrowRight: 'right', d: 'right',
+  ' ': 'sword', j: 'sword', z: 'sword', e: 'act', Enter: 'act', x: 'act', k: 'act' };
+function press(k) {
+  if (keys[k]) return; keys[k] = true;
+  if (state === 'dialog' && (k === 'act' || k === 'sword')) {
+    const pg = dialog.pages[dialog.page], total = pg.join('').length;
+    if (dialog.chars < total) dialog.chars = total;
+    else if (++dialog.page >= dialog.pages.length) { dialog = null; state = 'play'; }
+    else dialog.chars = 0;
+    return;
+  }
+  if (state === 'over' && (k === 'act' || k === 'sword')) { newGame(true); return; }
+  if (state !== 'play') return;
+  if ((k === 'act' || k === 'sword') && facing()) { interact(); return; }
+  if (k === 'sword' && hero.atk < 0 && hero.knock <= 0) { hero.atk = 0; hero.cutDone = false; }
+}
+function release(k) { keys[k] = false; }
+addEventListener('keydown', e => { const k = KEYMAP[e.key]; if (k) { e.preventDefault(); if (!e.repeat) press(k); } });
+addEventListener('keyup', e => { const k = KEYMAP[e.key]; if (k) release(k); });
+document.querySelectorAll('.pad button').forEach(b => {
+  b.onpointerdown = e => { press(b.dataset.k); b.setPointerCapture(e.pointerId); };
+  b.onpointerup = b.onpointercancel = () => release(b.dataset.k);
+});
+
+// =====================================================================
+// ACTUALIZACIÓN
+// =====================================================================
+const ATK_T = .3, R_HERO = .28;
+const angDiff = (a, b) => { let d = a - b; while (d > Math.PI) d -= 2 * Math.PI; while (d < -Math.PI) d += 2 * Math.PI; return d; };
+function update(dt) {
+  time += dt;
+  for (const p of parts) { p.m.position.x += p.vx * dt; p.m.position.y += p.vy * dt; p.m.position.z += p.vz * dt; p.vy -= 12 * dt; p.life -= dt; p.m.rotation.x += dt * 8; if (p.life <= 0) scene.remove(p.m); }
+  parts = parts.filter(p => p.life > 0);
+  T.water.offset.x = (time * .15) % 1; T.water.offset.y = Math.sin(time) * .05;
+  if (chest?.opening && chest.open < 1) { chest.open = Math.min(1, chest.open + dt * 3); chest.lid.rotation.x = -1.9 * chest.open; }
+  if (state === 'dialog') { dialog.chars += dt * 45; return; }
+  if (state !== 'play') return;
+
+  // --- Kael ---
+  hero.inv -= dt;
+  const face = Math.atan2(hero.fx, hero.fz);
+  if (hero.knock > 0) { hero.knock -= dt; moveC(hero, hero.kx * dt, hero.kz * dt, R_HERO); }
+  else if (hero.atk >= 0) {
+    hero.atk += dt;
+    if (hero.atk > .08 && !hero.cutDone) {   // el tajo barre un arco delante: corta lo que toca
+      hero.cutDone = true;
+      for (const a of [face - 1, face - .5, face, face + .5, face + 1]) for (const r of [.6, 1]) cut(Math.floor(hero.x + Math.sin(a) * r), Math.floor(hero.z + Math.cos(a) * r));
+    }
+    if (hero.atk < .24) for (const e of enemies) {
+      if (e.flash > 0) continue;
+      const dx = e.x - hero.x, dz = e.z - hero.z, d = Math.hypot(dx, dz);
+      if (d < 1.35 && (Math.abs(angDiff(Math.atan2(dx, dz), face)) < 1.5 || d < .5)) {
+        e.hp--; e.flash = .35; e.knock = .15; e.vx = dx / d * 7; e.vz = dz / d * 7;
+        if (e.hp <= 0) { e.dead = true; scene.remove(e.g); burst(e.x, .4, e.z, [0xf0f4f8, 0xc8d0d8, 0x8a90b0], 12); drop(e.x, e.z, .65); }
+      }
+    }
+    enemies = enemies.filter(e => !e.dead);
+    if (hero.atk > ATK_T) hero.atk = -1;
+  } else {
+    const dx = (keys.right ? 1 : 0) - (keys.left ? 1 : 0), dz = (keys.down ? 1 : 0) - (keys.up ? 1 : 0);
+    hero.moving = !!(dx || dz);
+    if (hero.moving) {
+      const l = Math.hypot(dx, dz); hero.fx = dx / l; hero.fz = dz / l;
+      moveC(hero, hero.fx * 3.4 * dt, hero.fz * 3.4 * dt, R_HERO);
+      hero.anim += dt * 10;
+    }
+  }
+  hero.ang += angDiff(Math.atan2(hero.fx, hero.fz), hero.ang) * Math.min(1, dt * 18);
+
+  // --- enemigos ---
+  for (const e of enemies) {
+    e.flash -= dt; e.t -= dt;
+    const near = Math.hypot(hero.x - e.x, hero.z - e.z) < 6;
+    if (e.knock > 0) { e.knock -= dt; moveC(e, e.vx * dt, e.vz * dt, .25); }
+    else if (e.type === 'slime') {
+      if (e.hop > 0) { e.hop -= dt; moveC(e, e.vx * dt, e.vz * dt, .25); }
+      else if (e.t <= 0) {
+        const a = near ? Math.atan2(hero.x - e.x, hero.z - e.z) + (Math.random() - .5) * .8 : Math.random() * 6.28;
+        e.vx = Math.sin(a) * 2.6; e.vz = Math.cos(a) * 2.6; e.hop = .34; e.t = .7 + Math.random() * .7; e.face = a;
+      }
+    } else {
+      if (e.t <= 0) {
+        if (!e.shoot && near && Math.random() < .6) { e.shoot = .45; e.t = .8;
+          e.dir = Math.abs(hero.x - e.x) > Math.abs(hero.z - e.z) ? (hero.x > e.x ? 'right' : 'left') : (hero.z > e.z ? 'down' : 'up'); }
+        else { e.dir = ['up', 'down', 'left', 'right'][Math.floor(Math.random() * 4)]; e.t = .8 + Math.random() * 1.2; e.shoot = 0; }
+      }
+      const [dx, dz] = DIR4[e.dir];
+      if (e.shoot > 0) {
+        e.shoot -= dt;
+        if (e.shoot <= 0) { const m = mesh(rockGeo, M.rock, e.x + dx * .4, .38, e.z + dz * .4); rocks.push({ m, x: e.x + dx * .4, z: e.z + dz * .4, vx: dx * 5, vz: dz * 5 }); e.shoot = 0; e.t = .6; }
+      } else if (moveC(e, dx * 1.4 * dt, dz * 1.4 * dt, .25)) e.t = 0;
+      e.face = Math.atan2(dx, dz);
+    }
+    if (Math.hypot(hero.x - e.x, hero.z - e.z) < .5) hurt(e.x, e.z, 1);
+  }
+
+  // --- piedras: el escudo las para si Kael las mira de frente ---
+  for (const r of rocks) {
+    r.x += r.vx * dt; r.z += r.vz * dt; r.m.position.set(r.x, .38, r.z); r.m.rotation.x += dt * 10;
+    if (!free(r.x, r.z, .05)) { r.dead = true; burst(r.x, .38, r.z, [0x8a90b0], 4, 1.5); continue; }
+    if (Math.hypot(r.x - hero.x, r.z - hero.z) < .4) {
+      r.dead = true;
+      const facingRock = Math.abs(angDiff(Math.atan2(-r.vx, -r.vz), Math.atan2(hero.fx, hero.fz))) < .9;
+      if (facingRock && hero.atk < 0) burst(r.x, .45, r.z, [0xf0f4f8, 0xf0c040], 6, 2); else hurt(r.x, r.z, 1);
+    }
+  }
+  rocks = rocks.filter(r => { if (r.dead) scene.remove(r.m); return !r.dead; });
+
+  // --- objetos ---
+  for (const p of pickups) {
+    p.t += dt; p.m.rotation.y += dt * 3; p.m.position.y = .3 + Math.sin(p.t * 4) * .06;
+    p.m.visible = !(p.t > 8 && Math.floor(p.t * 10) % 2);
+    if (Math.hypot(p.x - hero.x, p.z - hero.z) < .45) {
+      p.dead = true;
+      if (p.kind === 'heart') hero.hp = Math.min(hero.maxHp, hero.hp + 2); else hero.gems = Math.min(999, hero.gems + (p.kind === 'gemB' ? 5 : 1));
+      burst(p.x, .4, p.z, p.kind === 'heart' ? [0xe04030, 0xf0f4f8] : [0xb8e890, 0xf0f4f8], 6, 1.5);
+    }
+    if (p.t > 10) p.dead = true;
+  }
+  pickups = pickups.filter(p => { if (p.dead) scene.remove(p.m); return !p.dead; });
+}
+
+// --- pose de Kael y de los enemigos para este fotograma ---
+function pose() {
+  hero3d.position.set(hero.x, 0, hero.z); hero3d.rotation.y = hero.ang;
+  hero3d.visible = !(hero.inv > 0 && Math.floor(hero.inv * 16) % 2);
+  // árboles entre la cámara y Kael: se vuelven semitransparentes para no taparlo
+  for (const t of trees) {
+    const block = t.z > hero.z - .2 && t.z - hero.z < 3.2 && Math.abs(t.x - hero.x) < 1.7;
+    if (block !== t.faded) { t.faded = block; t.g.children.forEach((m, i) => m.material = i === 0 ? (block ? M.barkFade : M.bark) : (block ? M.leavesFade : M.leaves)); }
+  }
+  const walk = hero.moving && hero.atk < 0 && hero.knock <= 0 ? Math.sin(hero.anim) : 0;
+  const breathe = hero.moving ? 0 : Math.sin(time * 3) * .012;
+  legL.rotation.x = walk * .7; legR.rotation.x = -walk * .7;
+  armL.rotation.set(-.5 - walk * .2, 0, 0);                                    // escudo al frente
+  body.position.y = Math.abs(walk) * .04 + breathe; head.rotation.z = walk * .04;
+  tail1.rotation.y = Math.sin(time * 8) * .4; tail2.rotation.y = Math.sin(time * 8 + 1) * .4;
+  if (hero.atk >= 0) {                        // tajo horizontal: el brazo barre de derecha a izquierda
+    const t = Math.min(1, hero.atk / .16), e = 1 - (1 - t) ** 3;
+    armR.rotation.set(-Math.PI / 2, -1.4 + e * 2.6, 0);
+    body.rotation.y = .3 - e * .6;
+    trail.visible = hero.atk < .24; trail.geometry.dispose();
+    trail.geometry = new THREE.RingGeometry(.55, 1.05, 12, 1, Math.PI + .25, Math.max(.01, e * 2.6));
+    trailMat.opacity = hero.atk < .16 ? .75 : .75 * (1 - (hero.atk - .16) / .08);
+  } else { armR.rotation.set(-.35 + walk * .6, 0, 0); body.rotation.y = 0; trail.visible = false; }
+
+  for (const e of enemies) {
+    const fl = e.flash > 0 && Math.floor(e.flash * 20) % 2;
+    e.mats.forEach(m => m.emissive.setHex(fl ? 0xffffff : 0x000000));
+    e.g.position.set(e.x, 0, e.z); e.g.rotation.y = e.face || 0;
+    if (e.type === 'slime') {
+      const k = e.hop > 0 ? Math.sin((1 - e.hop / .34) * Math.PI) : 0;
+      e.body.position.y = .26 + k * .45; e.body.scale.set(1 - k * .15 + (k ? 0 : Math.sin(time * 6) * .05), .8 + k * .35, 1 - k * .15);
+    } else {
+      e.legs.forEach((l, i) => l.rotation.x = Math.sin(time * 12 + i * 1.6) * .5);
+      const s = e.shoot > 0 ? 1.12 : 1; e.body.scale.set(s, .9 * s, s);
+    }
+  }
+  // cámara 3/4 desde arriba que sigue a Kael con suavidad
+  const tx = hero.x, tz = hero.z + 5.6;
+  camera.position.x += (tx - camera.position.x) * .12; camera.position.z += (tz - camera.position.z) * .12; camera.position.y = 4.8;
+  camera.lookAt(camera.position.x, .5, camera.position.z - 5);
+}
+
+// =====================================================================
+// POSPROCESO + HUD en el lienzo 2D
+// =====================================================================
+const BAYER = [0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5];
+function dither() {                        // color de 15 bits con tramado ordenado 4x4, como la PS1
+  const img = g.getImageData(0, 0, W, H), d = img.data;
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    const i = (y * W + x) * 4, b = (BAYER[(y & 3) * 4 + (x & 3)] - 7.5) * .9;
+    d[i] = clamp(d[i] + b, 0, 255) & 0xf8; d[i + 1] = clamp(d[i + 1] + b, 0, 255) & 0xf8; d[i + 2] = clamp(d[i + 2] + b, 0, 255) & 0xf8;
+  }
+  g.putImageData(img, 0, 0);
+}
+function sprite(rows, pal) {
+  const c = document.createElement('canvas'); c.width = rows[0].length; c.height = rows.length; const x = c.getContext('2d');
+  rows.forEach((r, y) => [...r].forEach((ch, i) => { if (pal[ch]) { x.fillStyle = pal[ch]; x.fillRect(i, y, 1, 1); } })); return c;
+}
+const HR = ['.oo.oo.', 'orrorro', 'orrrrro', '.orrro.', '..oro..', '...o...'];
+const HEART = sprite(HR, { o: O, r: '#e04030' }), HEART_E = sprite(HR, { o: O, r: '#5a3a28' });
+const HALF = (() => { const c = document.createElement('canvas'); c.width = 7; c.height = 6; const x = c.getContext('2d'); x.drawImage(HEART_E, 0, 0); x.drawImage(HEART, 0, 0, 3, 6, 0, 0, 3, 6); return c; })();
+const GEM = sprite(['..o..', '.olo.', 'olggo', 'olggo', 'oggGo', 'oggGo', '.oGo.', '..o..'], { o: O, l: '#b8e890', g: '#58b050', G: '#307838' });
+function text(s, x, y, col = '#f0f4f8', align = 'left') {
+  g.font = '8px "Press Start 2P"'; g.textAlign = align; g.textBaseline = 'top';
+  g.fillStyle = O; g.fillText(s, x + 1, y + 1); g.fillStyle = col; g.fillText(s, x, y);
+}
+function hud() {
+  g.drawImage(GEM, 8, 6); text(String(hero.gems).padStart(3, '0'), 16, 7);
+  text('- VIDA -', W - 8, 3, '#e04030', 'right');
+  const n = hero.maxHp / 2;
+  for (let i = 0; i < n; i++) { const v = hero.hp - i * 2; g.drawImage(v >= 2 ? HEART : v === 1 ? HALF : HEART_E, W - 10 - (n - i) * 8, 14); }
+  const act = state === 'play' && hero.atk < 0 && facing();
+  if (act && renderer.xr.isPresenting) text(`A: ${act}`, W / 2, 30, '#f0c040', 'center');
+  else if (act) {                            // aviso sobre la cabeza de Kael, proyectando su posición 3D a pantalla
+    const v = new THREE.Vector3(hero.x, 1.5, hero.z).project(camera);
+    text(`E: ${act}`, Math.round((v.x + 1) / 2 * W), Math.round((1 - v.y) / 2 * H) - 8, '#f0c040', 'center');
+  }
+  if (state === 'dialog') {
+    g.fillStyle = O; g.fillRect(12, 122, W - 24, 50); g.fillStyle = '#f0f4f8'; g.fillRect(14, 124, W - 28, 46);
+    g.fillStyle = '#1c3c80'; g.fillRect(16, 126, W - 32, 42);
+    const pg = dialog.pages[dialog.page]; let left = Math.floor(dialog.chars);
+    pg.forEach((line, i) => { text(line.slice(0, Math.max(0, left)), 24, 131 + i * 12); left -= line.length; });
+    if (dialog.chars >= pg.join('').length && Math.floor(time * 3) % 2) text('▼', W - 28, 158, '#f0c040');
+  }
+  if (state === 'over') {
+    g.fillStyle = '#1a1020cc'; g.fillRect(0, 0, W, H);
+    text('HAS CAÍDO', W / 2, 70, '#e04030', 'center'); text(renderer.xr.isPresenting ? 'Pulsa A o el GATILLO' : 'Pulsa E o ESPACIO', W / 2, 96, '#f0f4f8', 'center');
+  }
+}
+
+// =====================================================================
+newGame(false);
+camera.position.set(hero.x, 4.8, hero.z + 5.6);
+say('¡Kael, despierta! Ahora el valle es de tres dimensiones. FLECHAS: moverte · ESPACIO: espada · E: hablar y leer.');
+// =====================================================================
+// REALIDAD MIXTA (AR con passthrough): el valle se convierte en una maqueta sobre tu
+// mesa real (1 baldosa = 10 cm), recortada en un cuadrado, que se desplaza para que
+// Kael quede siempre en el centro.
+// JOYSTICK: moverse · GATILLO: espada · A / B / X / Y: hablar y leer.
+// BOTÓN DE AGARRE: mientras se mantiene, la maqueta sigue al mando (para ponerla en la mesa).
+// El HUD va en un panel flotante encima de la maqueta.
+// =====================================================================
+const AR = { k: .1, r: .3, centro: new THREE.Vector3(0, .8, -.55) };
+const arFoco = new THREE.Vector3();
+const recorte = [new THREE.Plane(), new THREE.Plane(), new THREE.Plane(), new THREE.Plane()];
+function situarRecorte() {
+  const c = AR.centro, r = AR.r;
+  recorte[0].set(new THREE.Vector3(1, 0, 0), -(c.x - r)); recorte[1].set(new THREE.Vector3(-1, 0, 0), c.x + r);
+  recorte[2].set(new THREE.Vector3(0, 0, 1), -(c.z - r)); recorte[3].set(new THREE.Vector3(0, 0, -1), c.z + r);
+}
+const hudC = document.createElement('canvas'); hudC.width = W; hudC.height = H;
+const hudTex = new THREE.CanvasTexture(hudC);
+hudTex.magFilter = hudTex.minFilter = THREE.NearestFilter; hudTex.generateMipmaps = false; hudTex.colorSpace = THREE.SRGBColorSpace;
+const panel = new THREE.Mesh(new THREE.PlaneGeometry(.56, .315),
+  new THREE.MeshBasicMaterial({ map: hudTex, transparent: true, depthTest: false, fog: false }));
+panel.renderOrder = 10; panel.visible = false; scene.add(panel);
+const arKeys = {};
+function arKey(k, on) {
+  if (on && !arKeys[k]) press(k); else if (!on && arKeys[k]) release(k);
+  arKeys[k] = on;
+}
+function arInput(frame) {
+  const ref = renderer.xr.getReferenceSpace();
+  let x = 0, y = 0, sword = false, act = false;
+  for (const src of frame.session.inputSources) {
+    const gp = src.gamepad; if (!gp) continue;
+    const ax = gp.axes.length >= 4 ? [gp.axes[2], gp.axes[3]] : [gp.axes[0] || 0, gp.axes[1] || 0];
+    if (Math.abs(ax[0]) > Math.abs(x)) x = ax[0];
+    if (Math.abs(ax[1]) > Math.abs(y)) y = ax[1];
+    sword ||= gp.buttons[0]?.pressed;
+    act ||= [4, 5].some(i => gp.buttons[i]?.pressed);
+    if (gp.buttons[1]?.pressed && src.gripSpace) {
+      const p = frame.getPose(src.gripSpace, ref)?.transform.position;
+      if (p) { AR.centro.set(p.x, Math.max(p.y - .03, 0), p.z); situarRecorte(); }
+    }
+  }
+  arKey('left', x < -.45); arKey('right', x > .45); arKey('up', y < -.45); arKey('down', y > .45);
+  arKey('sword', sword); arKey('act', act);
+}
+function arPose() {
+  // la maqueta se desliza con suavidad para seguir a Kael, como hacía la cámara
+  arFoco.x += (hero.x - arFoco.x) * .08; arFoco.z += (hero.z - arFoco.z) * .08;
+  scene.scale.setScalar(AR.k);
+  scene.position.copy(AR.centro).addScaledVector(arFoco, -AR.k);
+  // el panel es hijo de la escena: se deshace su escala para dejarlo fijo sobre la maqueta
+  panel.position.set(AR.centro.x, AR.centro.y + .4, AR.centro.z - AR.r + .02).sub(scene.position).divideScalar(AR.k);
+  panel.scale.setScalar(1 / AR.k);
+  g = hudC.getContext('2d'); g.clearRect(0, 0, W, H); hud(); g = sg;
+  hudTex.needsUpdate = true;
+}
+renderer.xr.addEventListener('sessionstart', () => {
+  arFoco.set(hero.x, 0, hero.z);
+  SNAP.value.set(1e5, 1e5);
+  scene.background = null; scene.fog = null; outside.visible = false;
+  renderer.setClearColor(0x000000, 0);
+  situarRecorte(); renderer.clippingPlanes = recorte;
+  panel.visible = true; arBtn.textContent = 'SALIR DE AR';
+  if (state === 'play') say('Pon la maqueta en tu mesa con el BOTÓN DE AGARRE. JOYSTICK: moverte · GATILLO: espada · A: hablar y leer.');
+});
+renderer.xr.addEventListener('sessionend', () => {
+  for (const k in arKeys) arKey(k, false);
+  scene.scale.setScalar(1); scene.position.set(0, 0, 0);
+  SNAP.value.set(W, H);
+  scene.background = new THREE.Color(SKY); scene.fog = new THREE.Fog(SKY, 9, 17); outside.visible = true;
+  renderer.setClearColor(0x000000, 1); renderer.clippingPlanes = [];
+  panel.visible = false; arBtn.textContent = 'ENTRAR EN AR';
+  renderer.setPixelRatio(1); renderer.setSize(W, H, false);
+});
+const arBtn = document.getElementById('vr-btn');
+navigator.xr?.isSessionSupported('immersive-ar').then(ok => { if (ok) arBtn.style.display = 'block'; });
+arBtn.onclick = () => {
+  const cur = renderer.xr.getSession();
+  if (cur) { cur.end(); return; }
+  navigator.xr.requestSession('immersive-ar', { optionalFeatures: ['local-floor'] }).then(s => renderer.xr.setSession(s));
+};
+// =====================================================================
+let last = performance.now();
+function loop(now, frame) {
+  const dt = Math.min(.033, (now - last) / 1000); last = now;
+  const vr = renderer.xr.isPresenting;
+  if (vr) arInput(frame);
+  update(dt); pose();
+  if (vr) { arPose(); renderer.render(scene, camera); return; }
+  renderer.render(scene, camera);
+  g.drawImage(renderer.domElement, 0, 0); dither(); hud();
+}
+document.fonts.load('8px "Press Start 2P"').finally(() => { document.getElementById('loading').remove(); renderer.setAnimationLoop(loop); });
+window.dbg = { get hero() { return hero; }, get enemies() { return enemies; }, get state() { return state; }, press, release, map, cuttable };
+</script>
+<a href="../../index.html" id="back-menu" title="Volver al Arcade" onmouseenter="this.style.opacity=1" onmouseleave="this.style.opacity=.7" style="opacity:.7;position:fixed;bottom:14px;left:14px;z-index:9999;font:bold 11px/1 'Press Start 2P',monospace;color:#1a1020;background:#f0c040;padding:8px 10px;text-decoration:none;box-shadow:inset -3px -3px #b07820,0 0 0 3px #1a1020;">← ARCADE · <span class="ver">v10</span></a>
+</body>
+</html>

@@ -8,13 +8,22 @@
 <script>
 // Realidad mixta con passthrough: ves tu habitación real y encima una bandeja virtual
 // con objetos. La bandeja se coloca poniendo el mando donde quieras (p. ej. sobre tu
-// mesa real) y pulsando el gatillo. Los objetos se cogen con el botón de agarre o
-// pellizcando; al soltarlos caen a la bandeja o al suelo real (y = 0 con local-floor).
+// mesa real) y pulsando el gatillo; girando el mando (o con el joystick) se orienta.
+// Los objetos se cogen con el botón de agarre o pellizcando; al soltarlos caen a la
+// bandeja o al suelo real (y = 0 con local-floor).
 const GRAB_DIST = 0.18;
 const FLOOR = 0;
 const BANDEJA = { w: 0.6, d: 0.4 };
+const EJE_Y = new THREE.Vector3(0, 1, 0);
 
-function bandeja() { return document.getElementById('bandeja').object3D.position; }
+function bandejaObj() { return document.getElementById('bandeja').object3D; }
+function bandeja() { return bandejaObj().position; }
+// Punto p en coordenadas de la bandeja (que solo gira en torno al eje vertical)
+function enBandeja(p) {
+  const o = bandejaObj();
+  return p.clone().sub(o.position).applyAxisAngle(EJE_Y, -o.rotation.y);
+}
+function sobreBandeja(l, m = 0) { return Math.abs(l.x) < BANDEJA.w / 2 + m && Math.abs(l.z) < BANDEJA.d / 2 + m; }
 
 // Choques entre objetos (aproximados como cilindros verticales: radio horizontal
 // data-radio, o data-size si no lo hay; media altura data-size).
@@ -57,7 +66,8 @@ AFRAME.registerComponent('agarrable', {
   volver() {
     // recoloca el objeto sobre la bandeja (al moverla o al pulsar A/X)
     if (this.holder) return;
-    this.el.object3D.position.copy(bandeja()).add(this.inicio);
+    const off = this.inicio.clone().applyAxisAngle(EJE_Y, bandejaObj().rotation.y);
+    this.el.object3D.position.copy(bandeja()).add(off);
     this.vel.set(0, 0, 0);
   },
   tick(t, dt) {
@@ -67,7 +77,7 @@ AFRAME.registerComponent('agarrable', {
     this.vel.y -= 9.8 * s;
     p.addScaledVector(this.vel, s);
     const b = bandeja();
-    const sobre = Math.abs(p.x - b.x) < BANDEJA.w / 2 && Math.abs(p.z - b.z) < BANDEJA.d / 2;
+    const sobre = sobreBandeja(enBandeja(p));
     let ground = (sobre && p.y > b.y - 0.1 ? b.y + 0.02 : FLOOR) + this.size;
     ground = Math.max(ground, colisiones(this));
     if (p.y < ground) {
@@ -106,18 +116,16 @@ AFRAME.registerComponent('agarrador', {
     this.prev.copy(hand);
   },
   // Si no hay ningún objeto a mano pero sí la bandeja, se lleva la bandeja con lo que
-  // tenga encima. Sigue a la mano sin inclinarse (la física la trata como rectángulo plano).
+  // tenga encima. Sigue a la mano sin inclinarse ni girar (la física la trata como rectángulo plano).
   cogerBandeja(hand) {
     const b = bandeja();
-    const m = 0.08;   // margen alrededor del borde
-    if (Math.abs(hand.x - b.x) > BANDEJA.w / 2 + m || Math.abs(hand.z - b.z) > BANDEJA.d / 2 + m ||
-        Math.abs(hand.y - b.y) > 0.15) return;
+    if (!sobreBandeja(enBandeja(hand), 0.08) || Math.abs(hand.y - b.y) > 0.15) return;
     if ([...document.querySelectorAll('[agarrador]')].some(el => el.components.agarrador.llevaBandeja)) return;   // ya la lleva la otra mano
     this.llevaBandeja = { mano: b.clone().sub(hand), encima: [] };
     for (const el of document.querySelectorAll('.agarrable')) {
       const c = el.components.agarrable, p = el.object3D.position;
       if (c.holder) continue;
-      if (Math.abs(p.x - b.x) < BANDEJA.w / 2 && Math.abs(p.z - b.z) < BANDEJA.d / 2 && p.y > b.y && p.y < b.y + 0.6) {
+      if (sobreBandeja(enBandeja(p)) && p.y > b.y && p.y < b.y + 0.6) {
         c.holder = 'bandeja';
         this.llevaBandeja.encima.push({ c, off: p.clone().sub(b) });
       }
@@ -159,21 +167,46 @@ AFRAME.registerComponent('agarrador', {
   }
 });
 
-// Gatillo: la bandeja se coloca justo debajo del mando (sin girar, para que la física
-// siga siendo un rectángulo alineado con los ejes).
+// Gatillo: mientras se mantiene pulsado, la bandeja sigue al mando justo debajo de él y
+// gira con él (su lado largo queda de través a donde apunta); al soltarlo se queda ahí.
+// Joystick a izquierda/derecha: gira la bandeja poco a poco con lo que tenga encima.
 // A / X: devuelve los objetos a la bandeja.
 AFRAME.registerComponent('colocador', {
   init() {
-    this.el.addEventListener('triggerdown', () => this.colocar());
+    this.colocando = false;
+    this.giro = 0;
+    this.q = new THREE.Quaternion();
+    this.el.addEventListener('triggerdown', () => { this.colocando = true; });
+    this.el.addEventListener('triggerup', () => { this.colocando = false; });
+    this.el.addEventListener('thumbstickmoved', e => { this.giro = Math.abs(e.detail.x) > 0.3 ? e.detail.x : 0; });
     for (const ev of ['abuttondown', 'xbuttondown']) this.el.addEventListener(ev, recolocar);
   },
+  tick(t, dt) {
+    if (!dt) return;
+    if (this.colocando) this.colocar();
+    else if (this.giro) girarBandeja(-this.giro * 1.5 * dt / 1000);
+  },
   colocar() {
-    const p = this.el.object3D.getWorldPosition(new THREE.Vector3());
-    const b = document.getElementById('bandeja').object3D;
+    const o = this.el.object3D;
+    const p = o.getWorldPosition(new THREE.Vector3());
+    const f = new THREE.Vector3(0, 0, -1).applyQuaternion(o.getWorldQuaternion(this.q));
+    const b = bandejaObj();
     b.position.set(p.x, Math.max(p.y - 0.03, 0), p.z);
+    if (Math.hypot(f.x, f.z) > 0.2) b.rotation.y = Math.atan2(-f.x, -f.z);   // apuntando casi en vertical no se cambia el giro
     recolocar();
   }
 });
+
+// Gira la bandeja sobre su centro y arrastra los objetos que estén encima
+function girarBandeja(a) {
+  const o = bandejaObj(), b = o.position;
+  for (const el of document.querySelectorAll('.agarrable')) {
+    const c = el.components.agarrable, p = el.object3D.position;
+    if (c.holder || !sobreBandeja(enBandeja(p)) || p.y < b.y || p.y > b.y + 0.6) continue;
+    p.copy(b).add(p.clone().sub(b).applyAxisAngle(EJE_Y, a));
+  }
+  o.rotation.y += a;
+}
 
 function recolocar() {
   for (const el of document.querySelectorAll('.agarrable')) el.components.agarrable.volver();
@@ -187,7 +220,12 @@ AFRAME.registerComponent('raton-agarre', {
     this.ray = new THREE.Raycaster();
     this.ray.far = 3;
     this.el.sceneEl.addEventListener('contextmenu', e => e.preventDefault());
-    window.addEventListener('keydown', e => { if (e.key === 'r' || e.key === 'R') recolocar(); });
+    window.addEventListener('keydown', e => {
+      const k = e.key.toLowerCase();
+      if (k === 'r') recolocar();
+      else if (k === 'q') girarBandeja(0.15);
+      else if (k === 'e') girarBandeja(-0.15);
+    });
     window.addEventListener('mousedown', e => {
       if (this.el.sceneEl.is('vr-mode') || this.el.sceneEl.is('ar-mode')) return;
       if (document.pointerLockElement !== this.el.sceneEl.canvas) return;
@@ -228,7 +266,7 @@ AFRAME.registerComponent('raton-agarre', {
 </style>
 </head>
 <body>
-<a class="back" href="../../index.html">← Arcade · <span class="ver">v9</span></a>
+<a class="back" href="../../index.html">← Arcade · <span class="ver">v10</span></a>
 <script>
   document.addEventListener('DOMContentLoaded', () => {
     const s = document.querySelector('a-scene');
