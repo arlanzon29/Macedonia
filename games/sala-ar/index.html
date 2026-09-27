@@ -98,14 +98,45 @@ AFRAME.registerComponent('agarrador', {
       const d = el.object3D.getWorldPosition(this.tmp).distanceTo(hand) - c.size;
       if (d < bestD) { bestD = d; best = el; }
     }
-    if (!best) return;
+    if (!best) { this.cogerBandeja(hand); return; }
     this.held = best;
     best.components.agarrable.holder = this.el;
     this.el.object3D.attach(best.object3D);
     best.setAttribute('material', 'emissive', '#333');
     this.prev.copy(hand);
   },
+  // Si no hay ningún objeto a mano pero sí la bandeja, se lleva la bandeja con lo que
+  // tenga encima. Sigue a la mano sin inclinarse (la física la trata como rectángulo plano).
+  cogerBandeja(hand) {
+    const b = bandeja();
+    const m = 0.08;   // margen alrededor del borde
+    if (Math.abs(hand.x - b.x) > BANDEJA.w / 2 + m || Math.abs(hand.z - b.z) > BANDEJA.d / 2 + m ||
+        Math.abs(hand.y - b.y) > 0.15) return;
+    if ([...document.querySelectorAll('[agarrador]')].some(el => el.components.agarrador.llevaBandeja)) return;   // ya la lleva la otra mano
+    this.llevaBandeja = { mano: b.clone().sub(hand), encima: [] };
+    for (const el of document.querySelectorAll('.agarrable')) {
+      const c = el.components.agarrable, p = el.object3D.position;
+      if (c.holder) continue;
+      if (Math.abs(p.x - b.x) < BANDEJA.w / 2 && Math.abs(p.z - b.z) < BANDEJA.d / 2 && p.y > b.y && p.y < b.y + 0.6) {
+        c.holder = 'bandeja';
+        this.llevaBandeja.encima.push({ c, off: p.clone().sub(b) });
+      }
+    }
+    document.getElementById('bandeja').setAttribute('scale', '1.03 1.03 1.03');
+  },
   release() {
+    if (this.llevaBandeja) {
+      const b = bandeja();
+      b.y = Math.max(b.y, 0);
+      for (const { c, off } of this.llevaBandeja.encima) {
+        c.el.object3D.position.copy(b).add(off);
+        c.holder = null;
+        c.vel.set(0, 0, 0);
+      }
+      this.llevaBandeja = null;
+      document.getElementById('bandeja').setAttribute('scale', '1 1 1');
+      return;
+    }
     if (!this.held) return;
     const el = this.held;
     el.sceneEl.object3D.attach(el.object3D);
@@ -120,6 +151,11 @@ AFRAME.registerComponent('agarrador', {
     const v = now.clone().sub(this.prev).multiplyScalar(1000 / dt);
     this.velocity.lerp(v, 0.5);
     this.prev.copy(now);
+    if (this.llevaBandeja) {
+      const b = bandeja();
+      b.copy(now).add(this.llevaBandeja.mano);
+      for (const { c, off } of this.llevaBandeja.encima) c.el.object3D.position.copy(b).add(off);
+    }
   }
 });
 
@@ -192,7 +228,7 @@ AFRAME.registerComponent('raton-agarre', {
 </style>
 </head>
 <body>
-<a class="back" href="../../index.html">← Arcade · <span class="ver">v8</span></a>
+<a class="back" href="../../index.html">← Arcade · <span class="ver">v9</span></a>
 <script>
   document.addEventListener('DOMContentLoaded', () => {
     const s = document.querySelector('a-scene');
