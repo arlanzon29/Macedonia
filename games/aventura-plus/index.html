@@ -36,11 +36,13 @@
   #bt-pausa { right:calc(14px + env(safe-area-inset-right)); top:14px; width:46px; height:46px; font-size:15px; background:rgba(255,255,255,.4); }
   #ar-btn { position:fixed; top:14px; right:14px; z-index:5; display:none; font:600 15px 'Fredoka', sans-serif; color:#0b1020;
     background:#3ff0ff; border:0; border-radius:10px; padding:9px 14px; cursor:pointer; box-shadow:0 4px 0 #1a86d8, 0 0 0 3px #0b1020; }
+  #vr-btn { position:fixed; top:62px; right:14px; z-index:5; display:none; font:600 15px 'Fredoka', sans-serif; color:#0b1020;
+    background:#ffb84a; border:0; border-radius:10px; padding:9px 14px; cursor:pointer; box-shadow:0 4px 0 #c0701a, 0 0 0 3px #0b1020; }
   #volver { position:fixed; bottom:14px; left:14px; z-index:5; font:600 14px 'Fredoka', sans-serif; color:#1a1430; background:#ffd24a;
     padding:8px 12px; border-radius:10px; text-decoration:none; box-shadow:0 4px 0 #b07820, 0 0 0 3px #1a1430; opacity:.75; }
   #volver:hover { opacity:1; }
   body.tactil #volver { bottom:auto; top:14px; padding:6px 10px; font-size:12px; }
-  body.tactil #ar-btn { right:76px; }
+  body.tactil #ar-btn, body.tactil #vr-btn { right:76px; }
 </style>
 <script type="importmap">
 { "imports": {
@@ -59,7 +61,8 @@
   <button class="bt" id="bt-pausa" data-k="pausa">❚❚</button>
 </div>
 <button id="ar-btn">ENTRAR EN AR</button>
-<a id="volver" href="../../index.html">← ARCADE · <span class="ver">v17</span></a>
+<button id="vr-btn">ENTRAR EN VR</button>
+<a id="volver" href="../../index.html">← ARCADE · <span class="ver">v18</span></a>
 <script type="module">
 import * as THREE from 'three';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
@@ -86,6 +89,8 @@ import { mergeGeometries, mergeVertices } from 'three/addons/utils/BufferGeometr
 //   AR:      JOYSTICK IZQ. mover · GATILLO espada · A / X acción · B / Y pausa ·
 //            AGARRE: mover y girar la maqueta (con los dos: cambiar su tamaño) ·
 //            JOYSTICK DER.: girar (izq./der.) y acercar/alejar (arriba/abajo) la maqueta
+//   VR:      igual que en AR, pero a lo grande y en tercera persona, detrás de Kael ·
+//            JOYSTICK DER.: girar la cámara a saltos de 30° · AGARRE: recentrar la vista
 // =====================================================================
 
 const PI = Math.PI, TAU = PI * 2;
@@ -4059,7 +4064,7 @@ function pintarHUD(c, W, H) {
     if (J.modal === 'pausa') pintarPausa(c, W, H);
     if (J.modal === 'muerte') pintarMuerte(c, W, H);
     if (J.modo === 'fin') pintarFin(c, W, H);
-    if (ar && J.ayudaAR > 0) { c.globalAlpha = clamp(J.ayudaAR, 0, 1); txt(c, 'AGARRE: mover la maqueta · DOS AGARRES: tamaño · JOYSTICK DER.: girar y zoom', W / 2, H - 20, 22, '#bfe8ff', 'center', 600, 4); c.globalAlpha = 1; }
+    if (ar && J.ayudaAR > 0) { c.globalAlpha = clamp(J.ayudaAR, 0, 1); txt(c, J.vr ? 'JOYSTICK DER.: girar la cámara · AGARRE: recentrar la vista' : 'AGARRE: mover la maqueta · DOS AGARRES: tamaño · JOYSTICK DER.: girar y zoom', W / 2, H - 20, 22, '#bfe8ff', 'center', 600, 4); c.globalAlpha = 1; }
   }
   // transición (iris en el monitor; en AR la ventana de la maqueta se cierra sola)
   if (J.iris < 1 && !ar) {
@@ -4106,7 +4111,8 @@ function pintarTitulo(c, W, H) {
   });
   const ayuda = J.ar ? 'JOYSTICK: elegir · GATILLO o A: aceptar' : CTL.disp === 'tactil' ? 'Toca ⚔ o A para empezar' : CTL.disp === 'mando' ? 'Stick: elegir · A: aceptar' : '↑ ↓ elegir · ENTER o ESPACIO aceptar';
   txt(c, ayuda, W / 2, H - 56, 24, '#bcd0f0', 'center', 500, 5);
-  if (!J.ar && navigator.xr && J.arDisponible) txt(c, 'En Meta Quest, pulsa ENTRAR EN AR para jugar sobre tu mesa', W / 2, H - 22, 20, '#7fe0f0', 'center', 500, 4);
+  const xr = [J.arDisponible && 'ENTRAR EN AR para jugar sobre tu mesa', J.vrDisponible && 'ENTRAR EN VR para jugar a lo grande'].filter(Boolean).join(' o ');
+  if (!J.ar && navigator.xr && xr) txt(c, 'En Meta Quest, pulsa ' + xr, W / 2, H - 22, 20, '#7fe0f0', 'center', 500, 4);
 }
 // ---------- pausa: inventario, mapa y opciones ----------
 const PAUSA = { sel: 0 };
@@ -4178,7 +4184,7 @@ function crearMapaImg(area) {
 const J = {
   modo: 'carga', area: null, areas: {}, heroe: null, partida: null, modal: null, escena: null, control: true,
   tiempo: 0, dt: 0, pausaGolpe: 0, temblor: 0, flashDano: 0, iris: 1, interaccion: null,
-  ar: false, arDisponible: false, hayPartida: false, interruptor: false, jefe: null, golpesGallina: 0, zona: null, salaActual: null,
+  ar: false, vr: false, arDisponible: false, vrDisponible: false, hayPartida: false, interruptor: false, jefe: null, golpesGallina: 0, zona: null, salaActual: null,
   salaLimpia: {}, ayudaAR: 0, gemasVistas: 0,
 };
 const CLAVE = 'aventura-plus-partida';
@@ -4697,33 +4703,42 @@ const avC = document.createElement('canvas'); avC.width = 320; avC.height = 80;
 const avG = avC.getContext('2d'), avTex = new THREE.CanvasTexture(avC); avTex.colorSpace = THREE.SRGBColorSpace;
 const avisoAR = new THREE.Mesh(new THREE.PlaneGeometry(.12, .03), new THREE.MeshBasicMaterial({ map: avTex, transparent: true, depthTest: false, depthWrite: false, toneMapped: false }));
 avisoAR.material.defines = { SIN_NIEBLA: '' }; avisoAR.renderOrder = 21; avisoAR.visible = false; scene.add(avisoAR);
+// J.ar indica que hay una sesión XR (maqueta AR o VR a lo grande); J.vr, que es la de VR
+let modoXR = 'ar';
 renderer.xr.addEventListener('sessionstart', () => {
-  J.ar = true; XR_ENT.activo = true; XR_ENT.mapa = true;
-  scene.background = null; scene.fog = null; renderer.setClearColor(0x000000, 0);
-  panelAR.visible = true; J.ayudaAR = 12; U.uVentanaBorde.value = 1.3; U.uOclusion.value.z = 0;
-  if (J.heroe) AR.foco.set(J.heroe.x, J.heroe.z);
-  arBtn.textContent = 'SALIR DE AR';
+  J.ar = true; J.vr = modoXR === 'vr'; XR_ENT.activo = true; XR_ENT.mapa = true;
+  if (J.vr) { scene.background = CIELO.clone(); scene.fog = new THREE.Fog(CIELO.clone(), 5, 15); renderer.setClearColor(0x000000, 1); VR.centrar = 10; VR.listo = true; }
+  else { scene.background = null; scene.fog = null; renderer.setClearColor(0x000000, 0); }
+  panelAR.visible = true; panelAR.scale.setScalar(J.vr ? VR.panel : 1); avisoAR.scale.setScalar(J.vr ? VR.aviso : 1);
+  J.ayudaAR = 12; U.uVentanaBorde.value = 1.3; U.uOclusion.value.z = 0;
+  if (J.heroe) { AR.foco.set(J.heroe.x, J.heroe.z); VR.y = J.heroe.y; }
+  if (J.vr) vrBtn.textContent = 'SALIR DE VR'; else arBtn.textContent = 'SALIR DE AR';
   SND.iniciar();
 });
 renderer.xr.addEventListener('sessionend', () => {
-  J.ar = false; XR_ENT.activo = false; XR_ENT.mapa = false;
+  J.ar = false; J.vr = false; XR_ENT.activo = false; XR_ENT.mapa = false;
+  panelAR.scale.setScalar(1); avisoAR.scale.setScalar(1);
   mundo.position.set(0, 0, 0); mundo.rotation.set(0, 0, 0); mundo.scale.setScalar(1);
   U.uVentana.value.set(0, 0, 1e5, 1e5); U.uVentanaBorde.value = 1.6;
   scene.background = CIELO.clone(); scene.fog = new THREE.Fog(CIELO.clone(), 20, 46); renderer.setClearColor(0x000000, 1);
   if (J.area) { ambienteArea(J.area); for (const tr of J.area.trozos) tr.grupo.visible = true; }
   ajustarSombra(1); panelAR.visible = false; avisoAR.visible = false;
   renderer.setPixelRatio(CAL.dpr); renderer.setSize(innerWidth, innerHeight); ajustarPost(); ajustarHud();
-  arBtn.textContent = 'ENTRAR EN AR';
+  arBtn.textContent = 'ENTRAR EN AR'; vrBtn.textContent = 'ENTRAR EN VR';
 });
-const arBtn = document.getElementById('ar-btn');
+const arBtn = document.getElementById('ar-btn'), vrBtn = document.getElementById('vr-btn');
 navigator.xr?.isSessionSupported('immersive-ar').then(ok => { if (ok) { arBtn.style.display = 'block'; J.arDisponible = true; } }).catch(() => {});
-arBtn.onclick = async () => {
+navigator.xr?.isSessionSupported('immersive-vr').then(ok => { if (ok) { vrBtn.style.display = 'block'; J.vrDisponible = true; } }).catch(() => {});
+async function entrarXR(modo) {
   SND.iniciar();
   const s = renderer.xr.getSession();
   if (s) { s.end(); return; }
-  try { renderer.xr.setSession(await navigator.xr.requestSession('immersive-ar', { optionalFeatures: ['local-floor'] })); }
-  catch (e) { anotarError('AR: ' + e.message); }
-};
+  modoXR = modo;
+  try { renderer.xr.setSession(await navigator.xr.requestSession('immersive-' + modo, { optionalFeatures: ['local-floor'] })); }
+  catch (e) { anotarError(modo.toUpperCase() + ': ' + e.message); }
+}
+arBtn.onclick = () => entrarXR('ar');
+vrBtn.onclick = () => entrarXR('vr');
 const zonaMuerta = v => Math.abs(v) < .15 ? 0 : v;
 function leerXR(frame, dt) {
   const ref = renderer.xr.getReferenceSpace(), fuentes = [...frame.session.inputSources].filter(s => s.gamepad);
@@ -4734,8 +4749,11 @@ function leerXR(frame, dt) {
     const gp = src.gamepad;
     const ax = zonaMuerta(gp.axes.length >= 4 ? gp.axes[2] : gp.axes[0] || 0), ay = zonaMuerta(gp.axes.length >= 4 ? gp.axes[3] : gp.axes[1] || 0);
     if (src.handedness === 'right' && hayIzq) {
-      AR.giro -= ax * 1.5 * dt;
-      AR.k = clamp(AR.k * Math.exp(-ay * .9 * dt), .045, .22);
+      if (J.vr) girarVR(ax);
+      else {
+        AR.giro -= ax * 1.5 * dt;
+        AR.k = clamp(AR.k * Math.exp(-ay * .9 * dt), .045, .22);
+      }
     } else if (Math.hypot(ax, ay) > Math.hypot(mx, my)) { mx = ax; my = ay; }
     espada ||= !!gp.buttons[0]?.pressed;
     accion ||= !!gp.buttons[4]?.pressed;
@@ -4743,10 +4761,10 @@ function leerXR(frame, dt) {
     if (gp.buttons[1]?.pressed && src.gripSpace) { const pose = frame.getPose(src.gripSpace, ref); if (pose) agarrando.push({ src, t: pose.transform }); }
   }
   renderer.xr.getCamera().getWorldDirection(_a1);
-  const v = _a2.set(mx, 0, my).applyAxisAngle(EJE_Y, yawDe(_a1) - AR.giro);
+  const v = _a2.set(mx, 0, my).applyAxisAngle(EJE_Y, yawDe(_a1) - (J.vr ? VR.giro : AR.giro));
   XR_ENT.mx = v.x; XR_ENT.mz = v.z; XR_ENT.x = mx; XR_ENT.y = -my;
   XR_ENT.espada = espada; XR_ENT.accion = accion; XR_ENT.pausa = pausa;
-  agarres(agarrando);
+  if (J.vr) agarreVR(agarrando); else agarres(agarrando);
 }
 function yawMando(t) {
   const o = t.orientation, f = _a1.set(0, 0, -1).applyQuaternion(_aq.set(o.x, o.y, o.z, o.w));
@@ -4820,6 +4838,78 @@ function avisoAR3D() {
   avisoAR.position.copy(_a1);
   _a2.setFromMatrixPosition(renderer.xr.getCamera().matrixWorld); avisoAR.lookAt(_a2);
   avisoAR.visible = true;
+}
+
+// =====================================================================
+// REALIDAD VIRTUAL (tercera persona): el valle a lo grande, con su cielo y su niebla, y tú
+// de pie unos metros detrás de Kael y algo por encima. La vista sigue a Kael (en el
+// santuario, encuadra la sala) moviendo "mundo", no a ti. JOYSTICK DERECHO: la cámara gira
+// alrededor de Kael a saltos de 30°. AGARRE: recentrar la vista hacia donde miras.
+// Los valores de la cámara están aquí arriba para afinarlos.
+// =====================================================================
+const VR = {
+  k: .55,                       // metros por casilla (Kael mide algo más de una casilla)
+  dist: 3, alto: 1,             // fuera: Kael a 3 m delante de ti y su suelo 1 m por debajo del tuyo
+  distSala: 4.4, altoSala: 2,   // en el santuario, más lejos y más alto para ver la sala entera
+  seguir: 4,                    // rapidez con la que la vista sigue a Kael
+  paso: PI / 6,                 // giro a saltos de 30°
+  niebla: [12, 26],             // niebla, en casillas desde ti: dónde empieza y dónde tapa del todo
+  panel: 2, aviso: 3,           // tamaño del HUD flotante y del aviso de acción (respecto a AR)
+  giro: 0, listo: true, centrar: 0, y: 0, d: 3, h: 1, agarre: false,
+  base: new THREE.Vector3(), yawBase: 0, ancla: new THREE.Vector3(),
+};
+function girarVR(ax) {
+  if (Math.abs(ax) < .3) VR.listo = true;
+  else if (VR.listo && Math.abs(ax) > .6) { VR.giro += Math.sign(ax) * VR.paso; VR.listo = false; vibrar(.2, 25); }
+}
+// la vista se coloca delante de donde estás y hacia donde miras
+function recentrarVR() {
+  const cam = renderer.xr.getCamera();
+  _a2.setFromMatrixPosition(cam.matrixWorld); cam.getWorldDirection(_a1);
+  VR.base.set(_a2.x, 0, _a2.z);
+  if (Math.hypot(_a1.x, _a1.z) > .2) VR.yawBase = yawDe(_a1);
+}
+function agarreVR(lista) {
+  if (lista.length && !VR.agarre) { recentrarVR(); vibrar(.25, 30); }
+  VR.agarre = lista.length > 0;
+}
+function posarVR(dt) {
+  const h = J.heroe, a = J.area;
+  if (!a || !h) return;
+  if (VR.centrar > 0) { VR.centrar--; recentrarVR(); }
+  let fx = h.x, fz = h.z, hx = 1e3, hz = 1e3;
+  if (!a.exterior && J.salaActual) { const [c, f] = SALAS[J.salaActual]; fx = c * 12 + 6 + (h.x - c * 12 - 6) * .18; fz = f * 10 + 5 + (h.z - f * 10 - 5) * .12; hx = 6.3; hz = 5.3; }
+  else if (!a.exterior) hx = hz = 6;
+  AR.foco.x = suave(AR.foco.x, fx, VR.seguir, dt); AR.foco.y = suave(AR.foco.y, fz, VR.seguir, dt);
+  if (h.estado !== 'salto') VR.y = suave(VR.y, h.y, 3, dt);
+  VR.d = suave(VR.d, a.exterior ? VR.dist : VR.distSala, 3, dt); VR.h = suave(VR.h, a.exterior ? VR.alto : VR.altoSala, 3, dt);
+  // en las transiciones la ventana se cierra alrededor de Kael, como en AR
+  const iris = J.iris;
+  if (iris < 1) { hx = Math.min(hx, 34) * iris; hz = Math.min(hz, 34) * iris; }
+  U.uVentana.value.set(AR.foco.x, AR.foco.y, Math.max(.001, hx), Math.max(.001, hz));
+  // el foco (Kael) queda delante de ti; el giro hace orbitar el valle a su alrededor
+  _a1.set(0, 0, -VR.d).applyAxisAngle(EJE_Y, VR.yawBase);
+  VR.ancla.set(VR.base.x + _a1.x, -VR.h, VR.base.z + _a1.z);
+  mundo.scale.setScalar(VR.k); mundo.rotation.set(0, VR.giro, 0);
+  _a1.set(AR.foco.x, VR.y, AR.foco.y).multiplyScalar(VR.k).applyAxisAngle(EJE_Y, VR.giro);
+  mundo.position.copy(VR.ancla).sub(_a1);
+  mundo.updateMatrixWorld(true);
+  ajustarSombra(VR.k * 1.1);
+  scene.background.copy(CIELO); scene.fog.color.copy(CIELO);
+  scene.fog.near = VR.niebla[0] * VR.k; scene.fog.far = VR.niebla[1] * VR.k;
+  // solo se dibujan los trozos que no tapa la niebla (y que tocan la ventana)
+  const cam = renderer.xr.getCamera();
+  _a2.setFromMatrixPosition(cam.matrixWorld); mundo.worldToLocal(_a2);
+  const v = U.uVentana.value, m = U.uVentanaBorde.value + .5, lejos = VR.niebla[1] + 2;
+  for (const tr of a.trozos) {
+    const dx = Math.max(tr.x0 - _a2.x, 0, _a2.x - tr.x1), dz = Math.max(tr.z0 - _a2.z, 0, _a2.z - tr.z1);
+    tr.grupo.visible = dx * dx + dz * dz < lejos * lejos && tr.x1 > v.x - v.z - m && tr.x0 < v.x + v.z + m && tr.z1 > v.y - v.w - m && tr.z0 < v.y + v.w + m;
+  }
+  // panel del HUD flotando delante de ti, algo por encima de la vista, de cara a la cabeza
+  _a2.setFromMatrixPosition(cam.matrixWorld);
+  _a1.set(0, 0, -2.6).applyAxisAngle(EJE_Y, VR.yawBase).add(VR.base); _a1.y = Math.max(_a2.y, 1) + .5;
+  panelAR.position.copy(_a1);
+  panelAR.rotation.set(0, Math.atan2(_a2.x - _a1.x, _a2.z - _a1.z), 0);
 }
 
 // =====================================================================
@@ -4936,7 +5026,7 @@ function bucle(ahora, frame) {
   const real = Math.max(0, (ahora - ultimo) / 1000), dt = Math.min(.05, real); ultimo = ahora;
   J.dt = dt;
   try {
-    if (J.ar && frame) { leerXR(frame, dt); posarAR(dt); }
+    if (J.ar && frame) { leerXR(frame, dt); if (J.vr) posarVR(dt); else posarAR(dt); }
     leerEntrada(dt);
     actualizar(dt);
     if (!J.ar) { ajustarCamara(false); camara.updateMatrixWorld(); actualizarOclusion(); }

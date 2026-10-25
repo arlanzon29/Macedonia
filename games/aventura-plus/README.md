@@ -35,5 +35,10 @@ que sigue a Kael; en el santuario se ve la sala entera. **Botón de agarre**: mo
 **con los dos agarres**: cambiar su tamaño. **Joystick derecho**: girarla (izquierda/derecha) y
 acercarla o alejarla (arriba/abajo). El joystick izquierdo va según hacia dónde miras.
 
+En realidad virtual (**ENTRAR EN VR**) el valle se ve a lo grande (1 casilla = 55 cm) y tú estás de pie
+unos metros detrás de Kael, algo por encima, con el cielo y la niebla del valle. **Joystick derecho**:
+girar la cámara alrededor de Kael a saltos de 30°. **Botón de agarre**: recentrar la vista hacia donde
+miras. El resto de botones, igual que en AR.
+
 La partida se guarda sola (al abrir cofres, cambiar de zona, etc.) y la calidad gráfica se puede
 cambiar en la pausa (se baja sola si el ordenador va justo).

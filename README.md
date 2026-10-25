@@ -14,7 +14,7 @@ Jugable en **https://arlanzon29.github.io/Macedonia/**
 | [Escuadrón](games/escuadron/index.html) | Jugable | Cruza puertas de multiplicadores, haz crecer tu escuadrón y revienta los bloques que bajan. | [README](games/escuadron/README.md) |
 | [Convoy](games/convoy/index.html) | Jugable | Carretera en perspectiva: las puertas suben tu potencia de fuego y la horda te quita vida. | [README](games/convoy/README.md) |
 | [Pixel Ciclismo](games/ciclista/index.html) | Jugable | Etapa de montaña en pixel art: gestiona energía, da órdenes a tu compi y gasta bien tus 3 boosts. | [README](games/ciclista/README.md) |
-| [Aventura+](games/aventura-plus/index.html) | Jugable | La aventura de Kael a lo grande: valle con pueblo, río y bosque, santuario con puzles y jefe final. También como maqueta AR en Meta Quest. | [README](games/aventura-plus/README.md) |
+| [Aventura+](games/aventura-plus/index.html) | Jugable | La aventura de Kael a lo grande: valle con pueblo, río y bosque, santuario con puzles y jefe final. También como maqueta AR o en VR en tercera persona en Meta Quest. | [README](games/aventura-plus/README.md) |
 
 ## Instalar en el móvil
 
